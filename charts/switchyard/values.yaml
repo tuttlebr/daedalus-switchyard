@@ -51,7 +51,7 @@ config:
     base_url = "https://api.fireworks.ai/inference/v1"
     api_key_env = "OPENAI_API_KEY"
 
-    [llm_clients.fireworks_medium]
+    [llm_clients.fireworks_low]
     format = "openai_responses"
     base_url = "https://api.fireworks.ai/inference/v1"
     api_key_env = "OPENAI_API_KEY"
@@ -66,10 +66,10 @@ config:
     llm_client = "fireworks_xhigh"
     extra_body = { reasoning = { effort = "xhigh" } }
 
-    [targets.medium]
+    [targets.low]
     id = "accounts/fireworks/routers/glm-5p2-fast-us"
-    llm_client = "fireworks_medium"
-    extra_body = { reasoning = { effort = "medium" } }
+    llm_client = "fireworks_low"
+    extra_body = { reasoning = { effort = "low" } }
 
     [targets.classifier]
     id = "accounts/fireworks/routers/glm-5p2-fast-us"
@@ -81,7 +81,7 @@ config:
     mode = "capability"
     classifier_target = "classifier"
     strong_target = "xhigh"
-    weak_target = "medium"
+    weak_target = "low"
     base_threshold = 0.5
     threshold_step = 0.1
     recent_turn_window = 3

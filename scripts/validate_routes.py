@@ -11,10 +11,10 @@ import tomllib
 from typing import Never
 
 
-EXPECTED_EFFORTS = {"xhigh": "xhigh", "medium": "medium", "classifier": None}
+EXPECTED_EFFORTS = {"xhigh": "xhigh", "low": "low", "classifier": None}
 EXPECTED_FORMATS = {
     "xhigh": "openai_responses",
-    "medium": "openai_responses",
+    "low": "openai_responses",
     "classifier": "openai_chat",
 }
 CLASSIFIER_BASE_URL = (
@@ -127,7 +127,7 @@ def validate(path: Path) -> None:
         "mode": "capability",
         "classifier_target": "classifier",
         "strong_target": "xhigh",
-        "weak_target": "medium",
+        "weak_target": "low",
         "base_threshold": 0.5,
         "threshold_step": 0.1,
     }
