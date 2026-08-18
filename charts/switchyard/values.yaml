@@ -1,0 +1,147 @@
+replicaCount: 1
+
+image:
+  repository: switchyard
+  tag: v0.2.0
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsGroup: 1000
+  runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 4000
+  annotations: {}
+
+config:
+  logFilter: info
+  shutdownTimeout: 30s
+  routesToml: |-
+    schema_version = 1
+
+    [llm_clients.fireworks_xhigh]
+    format = "openai_responses"
+    base_url = "https://api.fireworks.ai/inference/v1"
+    api_key_env = "OPENAI_API_KEY"
+
+    [llm_clients.fireworks_medium]
+    format = "openai_responses"
+    base_url = "https://api.fireworks.ai/inference/v1"
+    api_key_env = "OPENAI_API_KEY"
+
+    [llm_clients.fireworks_classifier]
+    format = "openai_responses"
+    base_url = "https://api.fireworks.ai/inference/v1"
+    api_key_env = "OPENAI_API_KEY"
+
+    [targets.xhigh]
+    id = "accounts/fireworks/routers/glm-5p2-fast-us"
+    llm_client = "fireworks_xhigh"
+    extra_body = { reasoning = { effort = "xhigh" } }
+
+    [targets.medium]
+    id = "accounts/fireworks/routers/glm-5p2-fast-us"
+    llm_client = "fireworks_medium"
+    extra_body = { reasoning = { effort = "medium" } }
+
+    [targets.classifier]
+    id = "accounts/fireworks/routers/glm-5p2-fast-us"
+    llm_client = "fireworks_classifier"
+
+    [routes.stage]
+    id = "switchyard/stage"
+    type = "llm_classifier"
+    mode = "capability"
+    classifier_target = "classifier"
+    strong_target = "xhigh"
+    weak_target = "medium"
+    base_threshold = 0.5
+    threshold_step = 0.1
+    recent_turn_window = 3
+    tool_calling = true
+    reasoning = false
+
+apiKeySecret:
+  name: switchyard-api-key
+  key: OPENAI_API_KEY
+
+extraEnv: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+startupProbe:
+  failureThreshold: 30
+  periodSeconds: 2
+
+readinessProbe:
+  failureThreshold: 3
+  periodSeconds: 10
+  timeoutSeconds: 2
+
+livenessProbe:
+  failureThreshold: 3
+  periodSeconds: 20
+  timeoutSeconds: 2
+
+terminationGracePeriodSeconds: 40
+
+# The pinned v0.2.0 image is built for amd64 by default. Keep it off the ARM64
+# daedalus-06 worker unless you explicitly publish a compatible image.
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values:
+                - daedalus-06
+
+tolerations: []
+topologySpreadConstraints: []
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  additionalLabels: {}

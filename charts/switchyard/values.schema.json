@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "replicaCount",
+    "image",
+    "serviceAccount",
+    "service",
+    "config",
+    "apiKeySecret",
+    "resources"
+  ],
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "digest", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "minLength": 1},
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {"name": {"type": "string", "minLength": 1}}
+      }
+    },
+    "nameOverride": {"type": "string"},
+    "fullnameOverride": {"type": "string"},
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create", "automountServiceAccountToken", "annotations", "name"],
+      "properties": {
+        "create": {"type": "boolean"},
+        "automountServiceAccountToken": {"type": "boolean"},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}},
+        "name": {"type": "string"}
+      }
+    },
+    "podAnnotations": {"type": "object", "additionalProperties": {"type": "string"}},
+    "podLabels": {"type": "object", "additionalProperties": {"type": "string"}},
+    "podSecurityContext": {"type": "object"},
+    "securityContext": {"type": "object"},
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "port", "annotations"],
+      "properties": {
+        "type": {"type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"]},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logFilter", "shutdownTimeout", "routesToml"],
+      "properties": {
+        "logFilter": {"type": "string", "minLength": 1},
+        "shutdownTimeout": {"type": "string", "pattern": "^[1-9][0-9]*(ms|s|m|h)$"},
+        "routesToml": {"type": "string", "minLength": 1}
+      }
+    },
+    "apiKeySecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1}
+      }
+    },
+    "extraEnv": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "resources": {"type": "object"},
+    "startupProbe": {"type": "object"},
+    "readinessProbe": {"type": "object"},
+    "livenessProbe": {"type": "object"},
+    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1},
+    "nodeSelector": {"type": "object", "additionalProperties": {"type": "string"}},
+    "affinity": {"type": "object"},
+    "tolerations": {"type": "array", "items": {"type": "object"}},
+    "topologySpreadConstraints": {"type": "array", "items": {"type": "object"}},
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "minAvailable"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "minAvailable": {
+          "oneOf": [
+            {"type": "integer", "minimum": 0},
+            {"type": "string", "pattern": "^[0-9]+%$"}
+          ]
+        }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "interval", "scrapeTimeout", "additionalLabels"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "interval": {"type": "string", "pattern": "^[1-9][0-9]*(ms|s|m|h)$"},
+        "scrapeTimeout": {"type": "string", "pattern": "^[1-9][0-9]*(ms|s|m|h)$"},
+        "additionalLabels": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    }
+  }
+}

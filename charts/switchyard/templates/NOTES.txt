@@ -1,0 +1,13 @@
+Switchyard is available inside the cluster at:
+
+  http://{{ include "switchyard.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+Health:
+
+  kubectl --namespace {{ .Release.Namespace }} get --raw \
+    /api/v1/namespaces/{{ .Release.Namespace }}/services/{{ include "switchyard.fullname" . }}:{{ .Values.service.port }}/proxy/health
+
+Routes:
+
+  kubectl --namespace {{ .Release.Namespace }} get --raw \
+    /api/v1/namespaces/{{ .Release.Namespace }}/services/{{ include "switchyard.fullname" . }}:{{ .Values.service.port }}/proxy/v1/models

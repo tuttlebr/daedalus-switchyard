@@ -1,0 +1,77 @@
+schema_version = 1
+
+# Switchyard v0.2.0 keys model backends by (llm_client, model id). Keep one
+# client per effort so these same-model targets retain distinct extra_body data.
+[llm_clients.xhigh]
+format = "openai_responses"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[llm_clients.medium]
+format = "openai_responses"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[llm_clients.llm_classifier]
+format = "openai_chat"
+base_url = "http://inference-gateway.daedalus-dynamo.svc.cluster.local:32359/v1"
+
+[targets.xhigh]
+id = "accounts/fireworks/routers/glm-5p2-fast-us"
+llm_client = "xhigh"
+extra_body = { reasoning = { effort = "xhigh" } }
+
+[targets.medium]
+id = "accounts/fireworks/routers/glm-5p2-fast-us"
+llm_client = "medium"
+extra_body = { reasoning = { effort = "medium" } }
+
+# Keep the local classifier verdict in normal content so Switchyard can parse it.
+[targets.classifier]
+id = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
+llm_client = "llm_classifier"
+extra_body = { chat_template_kwargs = { enable_thinking = false } }
+
+# Keep the public route ID stable for the existing Daedalus configuration.
+[routes.stage]
+id = "switchyard/stage"
+type = "llm_classifier"
+mode = "capability"
+# The local TRT-LLM path enforces response_format with guided decoding. Keep the
+# classifier's four-field verdict contract in the prompt as defense in depth.
+prompt = """
+You are a task-level probability forecaster for a model router. Assess whether
+an efficient coding agent can complete the user task on one fresh run. Evaluate
+the task. Do not execute or answer it.
+
+Return exactly one JSON object with exactly these four keys and no others:
+{"crux":"nonempty string","primary_rule":"one allowed rule","capability_boundary":"one allowed boundary","p_solve":0.0}
+
+Allowed primary_rule values are SUP-1, SUP-2, SUP-3, SUP-4, SUP-5, UNC-1,
+UNC-2, LIM-1, LIM-2, and none. Allowed capability_boundary values are
+supported, uncertain, unsupported, and unmatched.
+
+Use SUP-1 for a complete output contract with a deterministic validator. Use
+SUP-2 when inputs and the environment are inspectable and end-to-end
+verification is possible. Use SUP-3 for explicit technical behavior covered by
+a representative harness. Use SUP-4 for a bounded mechanism and executable
+success condition. Use SUP-5 for reconstruction constrained by a strong
+reference or checker. Use UNC-1 for unresolved ambiguity. Use UNC-2 when
+completeness across heterogeneous inputs has no check. Use LIM-1 for noisy media
+without machine-checkable extraction. Use LIM-2 for undocumented hidden
+behavior. Use none and unmatched when no rule applies.
+
+p_solve is the probability of whole-task success from 0.0 through 1.0. Do not
+emit p_fail, confidence, a route, Markdown, commentary, or any extra key.
+"""
+classifier_target = "classifier"
+strong_target = "xhigh"
+weak_target = "medium"
+base_threshold = 0.5
+threshold_step = 0.1
+recent_turn_window = 3
+tool_calling = true
+
+# Keep discovery from adding an inbound reasoning object so the selected target
+# controls the effort.
+reasoning = false
