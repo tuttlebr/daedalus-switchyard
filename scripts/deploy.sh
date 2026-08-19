@@ -13,6 +13,32 @@ EXPECTED_CONTEXT="${EXPECTED_CONTEXT:-kubernetes-admin@kubernetes}"
 IMAGE_TAG="${IMAGE_TAG:-v0.2.0}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
 
+for command_name in helm kubectl python3; do
+  command -v "${command_name}" >/dev/null 2>&1 || {
+    echo "required command not found: ${command_name}" >&2
+    exit 127
+  }
+done
+
+python3 "${PROJECT_DIR}/scripts/validate_routes.py" "${ROUTES_FILE}"
+mapfile -t api_key_env_names < <(
+  python3 "${PROJECT_DIR}/scripts/validate_routes.py" \
+    --list-api-key-envs "${ROUTES_FILE}"
+)
+api_key_envs_json="$(
+  python3 "${PROJECT_DIR}/scripts/validate_routes.py" \
+    --json-api-key-envs "${ROUTES_FILE}"
+)"
+
+declare -A caller_api_key_values=()
+declare -A caller_api_key_was_set=()
+for api_key_env_name in "${api_key_env_names[@]}"; do
+  if [[ -v "${api_key_env_name}" ]]; then
+    caller_api_key_values["${api_key_env_name}"]="${!api_key_env_name}"
+    caller_api_key_was_set["${api_key_env_name}"]=1
+  fi
+done
+
 if [[ -f "${PROJECT_DIR}/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -20,7 +46,22 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
   set +a
 fi
 
-: "${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env or the environment}"
+for api_key_env_name in "${api_key_env_names[@]}"; do
+  if [[ -n "${caller_api_key_was_set[${api_key_env_name}]-}" ]]; then
+    printf -v "${api_key_env_name}" '%s' \
+      "${caller_api_key_values[${api_key_env_name}]}"
+    export "${api_key_env_name}"
+  fi
+  if [[ ! -v "${api_key_env_name}" || -z "${!api_key_env_name}" ]]; then
+    echo "Set ${api_key_env_name} in .env or the environment; routes.toml requires it" >&2
+    exit 64
+  fi
+  if [[ "${!api_key_env_name}" == *$'\n'* ]]; then
+    echo "${api_key_env_name} must not contain a newline" >&2
+    exit 64
+  fi
+done
+
 : "${IMAGE_REPOSITORY:?Set IMAGE_REPOSITORY to the registry image Kubernetes can pull}"
 
 if [[ ! "${RELEASE_NAME}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ || ${#RELEASE_NAME} -gt 53 ]]; then
@@ -40,26 +81,22 @@ if [[ -n "${IMAGE_DIGEST:-}" && ! "${IMAGE_DIGEST}" =~ ^sha256:[a-f0-9]{64}$ ]];
   exit 64
 fi
 
-for command_name in helm kubectl python3; do
-  command -v "${command_name}" >/dev/null 2>&1 || {
-    echo "required command not found: ${command_name}" >&2
-    exit 127
-  }
-done
-
 actual_context="$(kubectl config current-context)"
 if [[ "${actual_context}" != "${EXPECTED_CONTEXT}" ]]; then
   echo "refusing deployment: expected context ${EXPECTED_CONTEXT}, found ${actual_context}" >&2
   exit 1
 fi
 
-python3 "${PROJECT_DIR}/scripts/validate_routes.py" "${ROUTES_FILE}"
+redeployed_at="$(date -u +'%Y-%m-%dT%H:%M:%S.%NZ')"
+restart_annotation="podAnnotations.kubectl\\.kubernetes\\.io/restartedAt=${redeployed_at}"
 
 helm_validation_args=(
   --set-string "fullnameOverride=${RELEASE_NAME}"
   --set-string "image.repository=${IMAGE_REPOSITORY}"
   --set-string "image.tag=${IMAGE_TAG}"
   --set-string "apiKeySecret.name=${SECRET_NAME}"
+  --set-json "apiKeySecret.keys=${api_key_envs_json}"
+  --set-string "${restart_annotation}"
   --set-file "config.routesToml=${ROUTES_FILE}"
 )
 if [[ -n "${IMAGE_DIGEST:-}" ]]; then
@@ -71,9 +108,20 @@ helm template "${RELEASE_NAME}" "${CHART_DIR}" \
   --namespace "${NAMESPACE}" "${helm_validation_args[@]}" >/dev/null
 
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-kubectl --namespace "${NAMESPACE}" create secret generic "${SECRET_NAME}" \
-  --from-literal="OPENAI_API_KEY=${OPENAI_API_KEY}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+if ((${#api_key_env_names[@]} > 0)); then
+  api_key_env_file="$(mktemp)"
+  chmod 600 "${api_key_env_file}"
+  trap 'rm -f -- "${api_key_env_file}"' EXIT
+  for api_key_env_name in "${api_key_env_names[@]}"; do
+    printf '%s=%s\n' "${api_key_env_name}" "${!api_key_env_name}" \
+      >>"${api_key_env_file}"
+  done
+  kubectl --namespace "${NAMESPACE}" create secret generic "${SECRET_NAME}" \
+    --from-env-file="${api_key_env_file}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  rm -f -- "${api_key_env_file}"
+  trap - EXIT
+fi
 
 helm_args=(
   upgrade --install "${RELEASE_NAME}" "${CHART_DIR}"
@@ -88,6 +136,8 @@ helm_args=(
   --set-string "image.repository=${IMAGE_REPOSITORY}"
   --set-string "image.tag=${IMAGE_TAG}"
   --set-string "apiKeySecret.name=${SECRET_NAME}"
+  --set-json "apiKeySecret.keys=${api_key_envs_json}"
+  --set-string "${restart_annotation}"
   --set-file "config.routesToml=${ROUTES_FILE}"
 )
 

@@ -51,7 +51,8 @@ explicit `reasoning` object in the inbound request wins. The example therefore
 sets `routes.stage.reasoning = false`; Codex-style model discovery will not add
 its own effort, leaving the selected target in control. If callers should be
 allowed to override the routed effort, set route discovery to `true` and send
-`reasoning = { effort = "..." }` in each request.
+`reasoning = { effort = "..." }` in each request. Route validation accepts the
+efforts `low`, `medium`, `high`, `xhigh`, and `max`.
 
 The classifier adds one upstream model call per routed request. A missing,
 invalid, or inconsistent classifier verdict falls back to the strong `xhigh`
@@ -63,8 +64,8 @@ using the opening task and the configured three-turn recent window.
 - `routes.toml` is the deployment source for clients, targets, and routes.
 - `charts/switchyard/` contains the Helm chart.
 - `Dockerfile` builds the upstream v0.2.0 tag commit as a standalone Rust server.
-- `scripts/deploy.sh` validates, reconciles the API-key Secret, deploys Helm, and
-  checks rollout, EndpointSlice, and HTTP health.
+- `scripts/deploy.sh` validates, reconciles the API-key Secret, forces a fresh
+  pod rollout, deploys Helm, and checks rollout, EndpointSlice, and HTTP health.
 
 The chart mounts `routes.toml` from a ConfigMap and runs
 `switchyard-server --dry-run` in an init container before the application starts.
@@ -78,7 +79,7 @@ make validate
 ```
 
 This checks the classifier endpoint, protocol, auth, structured-verdict, and
-completion-effort invariants. It also lints the chart, renders it into the
+completion-effort allowlist. It also lints the chart, renders it into the
 `daedalus` namespace, and runs Kubernetes client-side validation.
 
 ## Build and publish the image
@@ -97,14 +98,13 @@ as `IMAGE_DIGEST=sha256:...` during deployment.
 
 ## Deploy
 
-Copy `.env.example` to `.env` and set the Fireworks key. `.env` is ignored by
-Git. The deployment script sends the key directly to a Kubernetes Secret; it
-does not place the key in Helm values or the ConfigMap.
+Copy `.env.example` to `.env` and set every credential named by an
+`llm_clients.*.api_key_env` entry in `routes.toml`. `.env` is ignored by Git.
+The deployment script discovers the unique names from `routes.toml`, creates
+matching Kubernetes Secret keys, and injects those keys into both Switchyard
+containers. It does not place credential values in Helm values or the ConfigMap.
 
 ```bash
-cp .env.example .env
-# Edit .env and set OPENAI_API_KEY.
-
 IMAGE_REPOSITORY=daedalus.ddns.me:5050/btuttle/switchyard \
 IMAGE_TAG=v0.2.0 \
 EXPECTED_CONTEXT=kubernetes-admin@kubernetes \
@@ -114,6 +114,13 @@ EXPECTED_CONTEXT=kubernetes-admin@kubernetes \
 The script fixes the namespace to `daedalus`, release name to `switchyard`, and
 Secret name to `switchyard-api-key` by default. Override `RELEASE_NAME` or
 `SECRET_NAME` only when you also intend to change those resource names.
+
+Each invocation adds a new non-secret restart annotation to the pod template.
+This makes Secret and mutable image-tag updates take effect in newly started
+containers. For each name discovered from `routes.toml`, a value supplied by
+the caller environment takes precedence over the same name in `.env`. The
+current Fireworks clients use `FIREWORKS_API_KEY`; unrelated variables such as
+`OPENAI_API_KEY` are ignored.
 
 The default scheduling contract requires `amd64` and excludes the ARM64
 `daedalus-06` worker. Publish a compatible multi-architecture image and override

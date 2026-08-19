@@ -4,7 +4,7 @@ image:
   repository: switchyard
   tag: v0.2.0
   digest: ""
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 imagePullSecrets: []
 nameOverride: ""
@@ -49,17 +49,17 @@ config:
     [llm_clients.fireworks_xhigh]
     format = "openai_responses"
     base_url = "https://api.fireworks.ai/inference/v1"
-    api_key_env = "OPENAI_API_KEY"
+    api_key_env = "FIREWORKS_API_KEY"
 
     [llm_clients.fireworks_low]
     format = "openai_responses"
     base_url = "https://api.fireworks.ai/inference/v1"
-    api_key_env = "OPENAI_API_KEY"
+    api_key_env = "FIREWORKS_API_KEY"
 
     [llm_clients.fireworks_classifier]
     format = "openai_responses"
     base_url = "https://api.fireworks.ai/inference/v1"
-    api_key_env = "OPENAI_API_KEY"
+    api_key_env = "FIREWORKS_API_KEY"
 
     [targets.xhigh]
     id = "accounts/fireworks/routers/glm-5p2-fast-us"
@@ -90,7 +90,8 @@ config:
 
 apiKeySecret:
   name: switchyard-api-key
-  key: OPENAI_API_KEY
+  keys:
+    - FIREWORKS_API_KEY
 
 extraEnv: []
 

@@ -82,10 +82,17 @@
     "apiKeySecret": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "key"],
+      "required": ["name", "keys"],
       "properties": {
         "name": {"type": "string", "minLength": 1},
-        "key": {"type": "string", "minLength": 1}
+        "keys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        }
       }
     },
     "extraEnv": {
