@@ -36,8 +36,9 @@ securityContext:
   runAsUser: 1000
 
 service:
-  type: ClusterIP
+  type: NodePort
   port: 4000
+  nodePort: 30260
   annotations: {}
 
 config:

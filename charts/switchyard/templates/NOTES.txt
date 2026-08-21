@@ -1,6 +1,12 @@
 Switchyard is available inside the cluster at:
 
   http://{{ include "switchyard.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+{{- if or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer") }}
+
+Switchyard is also available through any reachable cluster node at:
+
+  http://<node-ip>:{{ .Values.service.nodePort }}
+{{- end }}
 
 Health:
 

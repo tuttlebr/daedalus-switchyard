@@ -37,32 +37,6 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      initContainers:
-        - name: validate-routes
-          image: {{ include "switchyard.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args:
-            - --config
-            - /etc/switchyard/routes.toml
-            - --dry-run
-          env:
-            {{- range .Values.apiKeySecret.keys }}
-            - name: {{ . | quote }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $.Values.apiKeySecret.name }}
-                  key: {{ . | quote }}
-            {{- end }}
-            - name: RUST_LOG
-              value: {{ .Values.config.logFilter | quote }}
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          volumeMounts:
-            - name: config
-              mountPath: /etc/switchyard
-              readOnly: true
-            - name: tmp
-              mountPath: /tmp
       containers:
         - name: switchyard
           image: {{ include "switchyard.image" . | quote }}

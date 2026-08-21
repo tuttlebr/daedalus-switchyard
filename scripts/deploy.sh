@@ -20,14 +20,12 @@ for command_name in helm kubectl python3; do
   }
 done
 
-python3 "${PROJECT_DIR}/scripts/validate_routes.py" "${ROUTES_FILE}"
 mapfile -t api_key_env_names < <(
-  python3 "${PROJECT_DIR}/scripts/validate_routes.py" \
-    --list-api-key-envs "${ROUTES_FILE}"
+  python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" "${ROUTES_FILE}"
 )
 api_key_envs_json="$(
-  python3 "${PROJECT_DIR}/scripts/validate_routes.py" \
-    --json-api-key-envs "${ROUTES_FILE}"
+  python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" \
+    --json "${ROUTES_FILE}"
 )"
 
 declare -A caller_api_key_values=()

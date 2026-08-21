@@ -62,10 +62,11 @@
     "service": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "port", "annotations"],
+      "required": ["type", "port", "nodePort", "annotations"],
       "properties": {
         "type": {"type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"]},
         "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "nodePort": {"type": "integer", "minimum": 30000, "maximum": 32767},
         "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
       }
     },
