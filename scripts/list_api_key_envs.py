@@ -58,7 +58,7 @@ def main() -> int:
 
     if args.json:
         print(json.dumps(names, separators=(",", ":")))
-    else:
+    elif names:
         print(*names, sep="\n")
     return 0
 

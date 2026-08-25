@@ -4,7 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 CHART_DIR="${PROJECT_DIR}/charts/switchyard"
-ROUTES_FILE="${PROJECT_DIR}/routes.toml"
+ROUTES_FILE="${ROUTES_FILE:-routes_fireworks.toml}"
+if [[ "${ROUTES_FILE}" != /* ]]; then
+  ROUTES_FILE="${PROJECT_DIR}/${ROUTES_FILE}"
+fi
 
 NAMESPACE="daedalus"
 RELEASE_NAME="${RELEASE_NAME:-switchyard}"
@@ -20,9 +23,19 @@ for command_name in helm kubectl python3; do
   }
 done
 
+if [[ ! -f "${ROUTES_FILE}" ]]; then
+  echo "routes file not found: ${ROUTES_FILE}" >&2
+  exit 66
+fi
+
 mapfile -t api_key_env_names < <(
   python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" "${ROUTES_FILE}"
 )
+for api_key_env_index in "${!api_key_env_names[@]}"; do
+  if [[ -z "${api_key_env_names[${api_key_env_index}]}" ]]; then
+    unset 'api_key_env_names[api_key_env_index]'
+  fi
+done
 api_key_envs_json="$(
   python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" \
     --json "${ROUTES_FILE}"
@@ -51,7 +64,7 @@ for api_key_env_name in "${api_key_env_names[@]}"; do
     export "${api_key_env_name}"
   fi
   if [[ ! -v "${api_key_env_name}" || -z "${!api_key_env_name}" ]]; then
-    echo "Set ${api_key_env_name} in .env or the environment; routes.toml requires it" >&2
+    echo "Set ${api_key_env_name} in .env or the environment; ${ROUTES_FILE} requires it" >&2
     exit 64
   fi
   if [[ "${!api_key_env_name}" == *$'\n'* ]]; then

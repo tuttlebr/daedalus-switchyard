@@ -60,13 +60,15 @@ the opening task and the configured three-turn recent window.
 
 ## Files
 
-- `routes.toml` is the deployment source for clients, targets, and routes.
+- `routes_fireworks.toml`, `routes_openai.toml`, and `routes_local.toml` are the
+  selectable deployment sources for clients, targets, and routes.
 - `charts/switchyard/` contains the Helm chart.
 - `Dockerfile` builds the upstream v0.2.0 tag commit as a standalone Rust server.
 - `scripts/deploy.sh` reconciles the API-key Secret, forces a fresh pod rollout,
   deploys Helm, and checks rollout, EndpointSlice, and HTTP health.
 
-The chart mounts `routes.toml` from a ConfigMap and starts Switchyard directly.
+The chart mounts the selected routes file as `routes.toml` from a ConfigMap and
+starts Switchyard directly.
 It also exposes `/health` for Kubernetes probes and `/metrics` for an optional
 Prometheus `ServiceMonitor`.
 
@@ -74,39 +76,45 @@ Prometheus `ServiceMonitor`.
 
 ```bash
 make validate
+make validate ROUTES_FILE=routes_local.toml
 ```
 
 This lints the chart, renders it into the `daedalus` namespace, and runs
 Kubernetes client-side validation. Route policy is intentionally not validated,
-so `routes.toml` can be changed freely while experimenting.
+so the selected routes file can be changed freely while experimenting.
 
-## Build and publish the image
+## Build, publish, and deploy
 
 No official v0.2.0 container is assumed. Build the pinned upstream commit and
-push it to a registry every Kubernetes node can pull from:
+push it to a registry every Kubernetes node can pull from. Each route target
+runs the complete image build, push, and guarded deployment sequence:
 
 ```bash
-make image LOCAL_IMAGE=daedalus.ddns.me:5050/btuttle/switchyard:v0.2.0
-docker push daedalus.ddns.me:5050/btuttle/switchyard:v0.2.0
+make deploy-route_fireworks
+make deploy-route_openai
+make deploy-route_local
 ```
 
 For an immutable deployment, record the pushed manifest digest and provide it
 as `IMAGE_DIGEST=sha256:...` during deployment.
 
-## Deploy
-
-Copy `.env.example` to `.env` and set every credential named by an
-`llm_clients.*.api_key_env` entry in `routes.toml`. `.env` is ignored by Git.
-The deployment script discovers the unique names from `routes.toml`, creates
-matching Kubernetes Secret keys, and injects those keys into the Switchyard
-container. It does not place credential values in Helm values or the ConfigMap.
+To deploy an already-published image without rebuilding it, select the routes
+file explicitly:
 
 ```bash
-IMAGE_REPOSITORY=daedalus.ddns.me:5050/btuttle/switchyard \
-IMAGE_TAG=v0.2.0 \
-EXPECTED_CONTEXT=kubernetes-admin@kubernetes \
-./scripts/deploy.sh
+make deploy ROUTES_FILE=routes_local.toml
 ```
+
+The defaults are image repository
+`daedalus.ddns.me:5050/btuttle/switchyard`, tag `v0.2.0`, and Kubernetes context
+`kubernetes-admin@kubernetes`; each can still be overridden as a Make variable.
+
+Copy `.env.example` to `.env` and set every credential named by an
+`llm_clients.*.api_key_env` entry in the selected routes file. `.env` is ignored
+by Git. The deployment script discovers the unique names from that file,
+creates matching Kubernetes Secret keys, and injects those keys into the
+Switchyard container. It does not place credential values in Helm values or the
+ConfigMap.
 
 The script fixes the namespace to `daedalus`, release name to `switchyard`, and
 Secret name to `switchyard-api-key` by default. Override `RELEASE_NAME` or
@@ -114,10 +122,10 @@ Secret name to `switchyard-api-key` by default. Override `RELEASE_NAME` or
 
 Each invocation adds a new non-secret restart annotation to the pod template.
 This makes Secret and mutable image-tag updates take effect in newly started
-containers. For each name discovered from `routes.toml`, a value supplied by
-the caller environment takes precedence over the same name in `.env`. The
-current Fireworks clients use `FIREWORKS_API_KEY`; unrelated variables such as
-`OPENAI_API_KEY` are ignored.
+containers. For each name discovered from the selected routes file, a value
+supplied by the caller environment takes precedence over the same name in
+`.env`. The Fireworks clients use `FIREWORKS_API_KEY`; unrelated variables are
+ignored.
 
 The default scheduling contract requires `amd64` and excludes the ARM64
 `daedalus-06` worker. Publish a compatible multi-architecture image and override

@@ -1,33 +1,38 @@
 schema_version = 1
+
 # ------------------------------------------------------------------------------
 [llm_clients.strong]
 format = "openai_responses"
-base_url = "https://api.fireworks.ai/inference/v1"
-api_key_env = "FIREWORKS_API_KEY"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
 
 [targets.strong]
-id = "accounts/fireworks/models/deepseek-v4-flash-0731"
+id = "gpt-5.6-luna"
 llm_client = "strong"
-extra_body = { reasoning = { effort = "max" } }
+extra_body = { reasoning = { effort = "xhigh", summary = "concise" }, text = { verbosity = "low" }, store = false }
+
 # ------------------------------------------------------------------------------
 [llm_clients.weak]
 format = "openai_responses"
-base_url = "https://api.fireworks.ai/inference/v1"
-api_key_env = "FIREWORKS_API_KEY"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
 
 [targets.weak]
-id = "accounts/fireworks/models/deepseek-v4-flash-0731"
+id = "gpt-5.6-luna"
 llm_client = "weak"
-extra_body = { reasoning = { effort = "low" } }
+extra_body = { reasoning = { effort = "low", summary = "concise" }, text = { verbosity = "low" }, store = false }
+
 # ------------------------------------------------------------------------------
 [llm_clients.llm_classifier]
 format = "openai_chat"
-base_url = "http://inference-gateway.daedalus-dynamo.svc.cluster.local:32359/v1"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
 
 [targets.classifier]
-id = "Qwen/Qwen3.8-27B-FP8"
+id = "gpt-5.4-nano"
 llm_client = "llm_classifier"
-extra_body = { chat_template_kwargs = { enable_thinking = false } }
+extra_body = { reasoning_effort = "none" }
+
 # ------------------------------------------------------------------------------
 [routes.stage]
 id = "switchyard/stage"
