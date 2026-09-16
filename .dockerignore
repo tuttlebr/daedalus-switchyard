@@ -1,2 +1,4 @@
 *
 !Dockerfile
+!patches/
+!patches/*.patch

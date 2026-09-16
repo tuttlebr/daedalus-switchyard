@@ -1,69 +1,58 @@
 # Switchyard on Daedalus
 
-This repository builds NVIDIA-NeMo Switchyard v0.2.0 and deploys it as a
-non-root Helm workload in the `daedalus` namespace. The default route exposes
-`switchyard/stage` on the OpenAI Chat Completions, OpenAI Responses, and
-Anthropic Messages endpoints.
+This repository builds NVIDIA-NeMo Switchyard v0.2.0 with a local target-model
+alias patch and deploys it as a non-root Helm workload in the `daedalus`
+namespace. The default Fireworks route exposes model `daedalus` on the OpenAI
+Chat Completions, OpenAI Responses, and Anthropic Messages endpoints.
 
-The default capability classifier exposes one route backed by a local Qwen
-judge and two Fireworks DeepSeek completion signatures. The judge decides
-whether the low-effort target can complete the request; Switchyard then sends
-the original request to either the `weak` or `strong` completion target:
+`routes_fireworks.toml` uses the stage router with `efficient_first`: ordinary
+turns use the weak target; tool-result signals can escalate to the strong target.
+Both targets call Fireworks Nemotron 3 Ultra NVFP4 through the Responses API,
+with `medium` and `max` reasoning effort respectively.
 
 ```toml
 [targets.strong]
-id = "accounts/fireworks/models/deepseek-v4-flash-0731"
-llm_client = "strong"
-extra_body = { reasoning = { effort = "max" } }
+id = "fireworks-strong"
+model = "accounts/fireworks/models/nemotron-3-ultra-nvfp4"
+llm_client = "fireworks"
+extra_body = { reasoning = { effort = "max" }, truncation = "auto", reasoning_history = "interleaved" }
 
 [targets.weak]
-id = "accounts/fireworks/models/deepseek-v4-flash-0731"
-llm_client = "weak"
-extra_body = { reasoning = { effort = "low" } }
-
-[targets.classifier]
-id = "Qwen/Qwen3.8-27B-FP8"
-llm_client = "llm_classifier"
-extra_body = { chat_template_kwargs = { enable_thinking = false } }
-
-[routes.stage]
-id = "switchyard/stage"
-type = "llm_classifier"
-mode = "capability"
-classifier_target = "classifier"
-strong_target = "strong"
-weak_target = "weak"
-base_threshold = 0.5
-threshold_step = 0.1
+id = "fireworks-weak"
+model = "accounts/fireworks/models/nemotron-3-ultra-nvfp4"
+llm_client = "fireworks"
+extra_body = { reasoning = { effort = "medium" }, truncation = "auto", reasoning_history = "interleaved" }
 ```
 
-The classifier client uses OpenAI Chat Completions at
-`http://inference-gateway.daedalus-dynamo.svc.cluster.local:32359/v1`. The live
-Dynamo Service exposes port `32359`, not port `80`. Both completion targets use
-OpenAI Responses at Fireworks.
-
-Separate completion `llm_client` names are required in Switchyard v0.2.0. A
-client stores only one backend per model ID, so same-ID signatures on one client
-would collide and all but one target's configuration would be discarded.
+`id` identifies the routing target. The optional `model` names the model sent to
+the provider; omitting it preserves the original behavior where `id` serves
+both purposes. Distinct routing IDs keep each target's defaults independent,
+even when they share a client and provider model. Separate clients alone do
+not solve this for the stock v0.2.0 stage router, which also selects targets by
+ID. The Dockerfile applies `patches/target-model-aliases.patch` to the pinned
+source. **Rebuild the image before deploying this Fireworks configuration**;
+the unpatched image rejects the new `model` field.
 
 Switchyard treats `extra_body` as a default-only, shallow top-level merge. An
-explicit `reasoning` object in the inbound request wins. The example therefore
-sets `routes.stage.reasoning = false`; Codex-style model discovery will not add
-its own effort, leaving the selected target in control. If callers should be
-allowed to override the routed effort, set route discovery to `true` and send
-`reasoning = { effort = "..." }` in each request.
+explicit `reasoning` object in the inbound request wins. The route advertises
+`reasoning = false` so clients using discovery do not automatically supply an
+effort that overrides the selected target.
 
-The classifier adds one upstream model call per routed request. A missing,
-invalid, or inconsistent classifier verdict falls back to the `strong` target.
-Session affinity is intentionally disabled, so each request can be judged using
-the opening task and the configured three-turn recent window.
+The Fireworks targets use native Responses fields. Fireworks' [NIM compatibility
+guide](https://docs.fireworks.ai/tools-sdks/nim-compatibility) documents that
+unrecognized `chat_template_kwargs` keys are discarded. The targets therefore
+omit `medium_effort`, `truncate_history_thinking`, and `force_nonempty_content`.
+
+NAT's `INFO` message beginning “Expecting generate request payloads” describes
+its inbound workflow schema at startup. It is not a provider validation error,
+and does not require changing these upstream targets to Chat Completions.
 
 ## Files
 
 - `routes_fireworks.toml`, `routes_openai.toml`, and `routes_local.toml` are the
   selectable deployment sources for clients, targets, and routes.
 - `charts/switchyard/` contains the Helm chart.
-- `Dockerfile` builds the upstream v0.2.0 tag commit as a standalone Rust server.
+- `Dockerfile` builds the pinned upstream v0.2.0 commit with the target-model alias patch.
 - `scripts/deploy.sh` reconciles the API-key Secret, forces a fresh pod rollout,
   deploys Helm, and checks rollout, EndpointSlice, and HTTP health.
 
@@ -82,6 +71,15 @@ make validate ROUTES_FILE=routes_local.toml
 This lints the chart, renders it into the `daedalus` namespace, and runs
 Kubernetes client-side validation. Route policy is intentionally not validated,
 so the selected routes file can be changed freely while experimenting.
+
+The optional integration tests inspect actual upstream request bodies using a
+local mock, including both effort tiers, streaming tool history, escalation,
+and caller overrides. They do not contact Fireworks:
+
+```bash
+docker build -t switchyard:fireworks-schema-test .
+SWITCHYARD_TEST_IMAGE=switchyard:fireworks-schema-test python3 -m unittest discover -s tests -v
+```
 
 ## Build, publish, and deploy
 
@@ -154,11 +152,10 @@ For example:
 ```bash
 curl http://switchyard.daedalus.svc.cluster.local:4000/v1/responses \
   -H 'Content-Type: application/json' \
-  -d '{"model":"switchyard/stage","input":"Inspect and fix the failing tests."}'
+  -d '{"model":"daedalus","input":"Inspect and fix the failing tests."}'
 ```
 
 Every routed response includes `x-model-router-selected-model` and
-`x-model-router-rationale`. Because both completion signatures intentionally
-share one model ID, use the rationale header or structured logs to distinguish
-the classifier's `weak` and `strong` decisions; the selected-model header is
-identical for both completion targets.
+`x-model-router-rationale`. With the Fireworks aliases, the selected-model
+header distinguishes `fireworks-weak` from `fireworks-strong`; the request sent
+to Fireworks uses the full provider model ID from `model`.

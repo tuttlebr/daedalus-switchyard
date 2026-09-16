@@ -14,6 +14,11 @@ RUN git init . \
     && git checkout --detach FETCH_HEAD \
     && cargo build --locked --release -p switchyard-server
 
+COPY patches/target-model-aliases.patch /tmp/target-model-aliases.patch
+RUN git apply --check /tmp/target-model-aliases.patch \
+    && git apply /tmp/target-model-aliases.patch \
+    && cargo build --locked --release -p switchyard-server
+
 FROM debian:bookworm-slim
 
 ARG SWITCHYARD_COMMIT=1fc9ab887d1c663b0048ae24d5f473d15ed8daaa
@@ -23,6 +28,7 @@ LABEL org.opencontainers.image.title="NVIDIA-NeMo Switchyard server" \
       org.opencontainers.image.source="https://github.com/NVIDIA-NeMo/Switchyard" \
       org.opencontainers.image.version="0.2.0" \
       org.opencontainers.image.revision="${SWITCHYARD_COMMIT}" \
+      me.daedalus.switchyard.patches="target-model-aliases-v1" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \

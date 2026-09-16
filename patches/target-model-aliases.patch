@@ -1,0 +1,233 @@
+diff --git a/crates/libsy-llm-client/src/client.rs b/crates/libsy-llm-client/src/client.rs
+index f64259c..a1a4d89 100644
+--- a/crates/libsy-llm-client/src/client.rs
++++ b/crates/libsy-llm-client/src/client.rs
+@@ -57,6 +57,7 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
+ #[derive(Clone, Debug)]
+ pub struct ModelConfig {
+     model_name: String,
++    upstream_model: String,
+     default_backend: Backend,
+     other_backends: Option<Vec<Backend>>,
+ }
+@@ -69,12 +70,20 @@ impl ModelConfig {
+         default_backend: Backend,
+         other_backends: Option<Vec<Backend>>,
+     ) -> Self {
++        let model_name = model_name.into();
+         Self {
+-            model_name: model_name.into(),
++            upstream_model: model_name.clone(),
++            model_name,
+             default_backend,
+             other_backends,
+         }
+     }
++
++    /// Serve this routing name using a different provider model ID.
++    pub fn with_upstream_model(mut self, model: impl Into<String>) -> Self {
++        self.upstream_model = model.into();
++        self
++    }
+ }
+ 
+ /// A client that dispatches neutral-IR requests to per-model HTTP backends.
+@@ -91,6 +100,12 @@ pub struct TranslatingLlmClient {
+ }
+ 
+ impl TranslatingLlmClient {
++    fn upstream_model<'a>(&'a self, model: &'a str) -> &'a str {
++        self.model_to_config
++            .get(model)
++            .map_or(model, |config| config.upstream_model.as_str())
++    }
++
+     /// Builds a client over the given [`ModelConfig`]s, with a fresh shared HTTP
+     /// client and the built-in translation codecs.
+     pub fn new(model_configs: &[ModelConfig]) -> Result<Self> {
+@@ -191,7 +206,9 @@ impl TranslatingLlmClient {
+         model: &str,
+         endpoint: UpstreamEndpoint,
+     ) -> Result<EncodedResponse> {
+-        // The resolved name is the upstream model id (per the crate contract).
++        // Routing aliases keep per-target defaults distinct while the provider
++        // receives its own model ID, including on the count_tokens path.
++        let model = self.upstream_model(model);
+         llm_request.model = Some(model.to_string());
+         let mut body = encode_request(&llm_request, wire_format)
+             .map_err(|error| LlmClientError::RequestEncoding(error.to_string()))?;
+@@ -357,8 +374,8 @@ impl TranslatingLlmClient {
+     /// backend), and returns the neutral response.
+     ///
+     /// Resolution: `model_name` wins over `request.llm_request.model`; the
+-    /// resolved name is both the outer map key and the model id written into the
+-    /// request before translation. Missing models are invalid requests; unknown
++    /// resolved name is the outer map key; its configured upstream model ID is
++    /// written into the request. Missing models are invalid requests; unknown
+     /// models or wire formats are configuration errors.
+     pub async fn call_rewrite_model(
+         &self,
+@@ -472,7 +489,8 @@ impl TranslatingLlmClient {
+         // resolution so the response names whoever answered.
+         let served_model = model
+             .map(str::to_string)
+-            .or_else(|| llm_request.model.clone());
++            .or_else(|| llm_request.model.clone())
++            .map(|name| self.upstream_model(&name).to_string());
+ 
+         let request = Request {
+             llm_request,
+@@ -1231,6 +1249,73 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[tokio::test]
++    async fn routing_aliases_preserve_defaults_for_one_upstream_model()
++    -> std::result::Result<(), Box<dyn Error + Sync + Send + 'static>> {
++        let server = MockServer::start().await;
++        let mut models = Vec::new();
++        for (alias, effort) in [("strong", "max"), ("weak", "medium")] {
++            Mock::given(method("POST"))
++                .and(path("/v1/chat/completions"))
++                .and(wiremock::matchers::body_partial_json(json!({
++                    "model": "gpt", "reasoning_effort": effort
++                })))
++                .respond_with(chat_success_response())
++                .expect(1)
++                .mount(&server)
++                .await;
++            let mut backend = config(&format!("{}/v1", server.uri()));
++            backend
++                .extra_body
++                .insert("reasoning_effort".into(), json!(effort));
++            models.push(
++                ModelConfig::new(alias, Backend::OpenAiChat(backend), None)
++                    .with_upstream_model("gpt"),
++            );
++        }
++        let client = TranslatingLlmClient::new(&models)?;
++        for alias in ["weak", "strong"] {
++            let response = client.call_rewrite_model_raw(
++                Context::default(),
++                json!({"model": "public-route", "messages": [{"role": "user", "content": "hi"}]}),
++                None,
++                Some(alias),
++                WireFormat::OpenAiChat,
++            ).await?;
++            let RawResponse::Buffered(body) = response else {
++                panic!("expected a buffered response");
++            };
++            assert_eq!(body["model"], "gpt");
++        }
++        Ok(())
++    }
++
++    #[tokio::test]
++    async fn routing_alias_count_tokens_uses_upstream_model()
++    -> std::result::Result<(), Box<dyn Error + Sync + Send + 'static>> {
++        let server = MockServer::start().await;
++        Mock::given(method("POST"))
++            .and(path("/v1/messages/count_tokens"))
++            .and(wiremock::matchers::body_partial_json(
++                json!({"model": "claude"}),
++            ))
++            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"input_tokens": 7})))
++            .expect(1)
++            .mount(&server)
++            .await;
++        let client = TranslatingLlmClient::new(&[ModelConfig::new(
++            "strong",
++            Backend::Anthropic(config(&format!("{}/v1", server.uri()))),
++            None,
++        )
++        .with_upstream_model("claude")])?;
++        let response = client
++            .count_tokens("strong", request_for(Some("public-route"), false))
++            .await?;
++        assert_eq!(response["input_tokens"], 7);
++        Ok(())
++    }
++
+     #[tokio::test]
+     async fn extra_body_adds_defaults_without_overriding_the_request()
+     -> std::result::Result<(), Box<dyn Error + Sync + Send + 'static>> {
+diff --git a/crates/switchyard-server/src/config.rs b/crates/switchyard-server/src/config.rs
+index 676efdf..e5ff1e8 100644
+--- a/crates/switchyard-server/src/config.rs
++++ b/crates/switchyard-server/src/config.rs
+@@ -76,6 +76,9 @@ impl ServerConfig {
+         for (target_name, target) in &self.targets {
+             validate_value("target name", target_name)?;
+             validate_value(&format!("target {target_name} id"), &target.id)?;
++            if let Some(model) = &target.model {
++                validate_value(&format!("target {target_name} model"), model)?;
++            }
+             if !seen_client_model_ids.insert((target.llm_client.as_str(), target.id.as_str())) {
+                 tracing::warn!(
+                     "target {target_name} reuses model id {} on llm client {}; only one target per id is kept and the other is dropped. Give each target a unique model id, or point both routes at one target.",
+@@ -129,11 +132,14 @@ impl ServerConfig {
+             let model_configs = models_by_client
+                 .get_mut(&target.llm_client)
+                 .ok_or_else(|| ServerError::new("validated llm client was not initialized"))?;
+-            model_configs.push(ModelConfig::new(
+-                &target.id,
+-                build_backend(&target.llm_client, client_config, &target.extra_body)?,
+-                None,
+-            ));
++            model_configs.push(
++                ModelConfig::new(
++                    &target.id,
++                    build_backend(&target.llm_client, client_config, &target.extra_body)?,
++                    None,
++                )
++                .with_upstream_model(target.model.as_deref().unwrap_or(&target.id)),
++            );
+         }
+ 
+         let mut clients = BTreeMap::new();
+@@ -221,7 +227,9 @@ struct LlmClientConfig {
+ #[derive(Debug, Deserialize)]
+ #[serde(deny_unknown_fields)]
+ struct TargetConfig {
++    // Unique routing identity. Without `model`, also the provider model ID.
+     id: String,
++    model: Option<String>,
+     llm_client: String,
+     #[serde(default)]
+     extra_body: BTreeMap<String, Value>,
+@@ -1374,6 +1382,35 @@ target = "azure"
+         Ok(())
+     }
+ 
++    #[test]
++    fn accepts_distinct_routing_ids_for_one_provider_model() -> ServerResult<()> {
++        let configured = VALID_CONFIG
++            .replace(
++                "id = \"strong/model\"",
++                "id = \"strong/model\"\nmodel = \"shared-model\"",
++            )
++            .replace(
++                "id = \"weak/model\"",
++                "id = \"weak/model\"\nmodel = \"shared-model\"",
++            );
++        assert!(configured.contains("model = \"shared-model\""));
++        server_state_from_toml(&configured)?;
++        Ok(())
++    }
++
++    #[test]
++    fn rejects_blank_provider_model() {
++        let configured = VALID_CONFIG.replacen(
++            "llm_client = \"primary\"",
++            "model = \" \"\nllm_client = \"primary\"",
++            1,
++        );
++        let error = server_state_from_toml(&configured)
++            .err()
++            .expect("blank provider model must fail");
++        assert!(error.to_string().contains("model must be non-empty"));
++    }
++
+     #[test]
+     fn target_extra_body_is_parsed_and_applied_to_its_backend() -> ServerResult<()> {
+         let configured = VALID_CONFIG.replacen(

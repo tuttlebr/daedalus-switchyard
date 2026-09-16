@@ -1,51 +1,56 @@
 schema_version = 1
-
 # ------------------------------------------------------------------------------
-[llm_clients.strong]
+# Routing IDs must be distinct; model is the provider's actual model ID.
+# Requires the target-model-aliases patch applied by this repository's Dockerfile.
+[llm_clients.fireworks]
 format = "openai_responses"
 base_url = "https://api.fireworks.ai/inference/v1"
 api_key_env = "FIREWORKS_API_KEY"
+extra_headers = { x-multi-turn-session-id = "agent_4201kws76rm3fgescz3cst711jp4", x-session-affinity = "agent_4201kws76rm3fgescz3cst711jp4" }
 
 [targets.strong]
-id = "accounts/fireworks/routers/glm-5p2-fast"
-llm_client = "strong"
-extra_body = { reasoning = { effort = "xhigh" }}
-
-# ------------------------------------------------------------------------------
-[llm_clients.weak]
-format = "openai_responses"
-base_url = "https://api.fireworks.ai/inference/v1"
-api_key_env = "FIREWORKS_API_KEY"
+id = "fireworks-strong"
+model = "accounts/fireworks/models/deepseek-v4p1-flash"
+llm_client = "fireworks"
+extra_body = { reasoning = { effort = "high" }, truncation = "auto", reasoning_history = "interleaved" }
 
 [targets.weak]
-id = "accounts/fireworks/routers/glm-5p2-fast"
-llm_client = "weak"
-extra_body = { reasoning = { effort = "low" }}
+id = "fireworks-weak"
+model = "accounts/fireworks/models/glm-5p3-flash"
+llm_client = "fireworks"
+extra_body = { reasoning = { effort = "low" }, truncation = "auto", reasoning_history = "interleaved" }
 
-# ------------------------------------------------------------------------------
-[llm_clients.llm_classifier]
-format = "openai_chat"
-base_url = "https://api.fireworks.ai/inference/v1"
-api_key_env = "FIREWORKS_API_KEY"
-
-[targets.classifier]
-id = "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b"
-llm_client = "llm_classifier"
-extra_body = { reasoning_effort = "none" }
+# Reserve maximum reasoning for explicitly selected difficult work or recovery.
+[targets.deep_max]
+id = "fireworks-deep-max"
+model = "accounts/fireworks/models/deepseek-v4p1-flash"
+llm_client = "fireworks"
+extra_body = { reasoning = { effort = "max" }, truncation = "auto", reasoning_history = "interleaved" }
 
 # ------------------------------------------------------------------------------
 [routes.stage]
-id = "switchyard/stage"
-type = "llm_classifier"
-mode = "capability"
-classifier_target = "classifier"
-strong_target = "strong"
-weak_target = "weak"
-base_threshold = 0.5
-threshold_step = 0.1
+id = "daedalus"
+type = "stage_router"
+capable_target = "strong"
+efficient_target = "weak"
+picker = "capable_first"
+confidence_threshold = 0.5
 recent_turn_window = 3
 tool_calling = true
-session_affinity = false
-message_hash_fallback = false
-max_output_tokens = 8024
+reasoning = false
+
+# Select this route for briefings, recaps, research, and diagnosis from the start.
+# Skill-based selection belongs to the caller; stage routing uses tool signals.
+[routes.deep]
+id = "daedalus/deep"
+type = "passthrough"
+target = "strong"
+tool_calling = true
+reasoning = false
+
+[routes.deep_max]
+id = "daedalus/max"
+type = "passthrough"
+target = "deep_max"
+tool_calling = true
 reasoning = false
