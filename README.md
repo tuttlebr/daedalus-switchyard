@@ -81,6 +81,49 @@ docker build -t switchyard:fireworks-schema-test .
 SWITCHYARD_TEST_IMAGE=switchyard:fireworks-schema-test python3 -m unittest discover -s tests -v
 ```
 
+## Test deployed routes
+
+```bash
+make test routes_fireworks.toml
+# Equivalent, with the default routes file:
+make test
+make test ROUTES_FILE=routes_local.toml
+```
+
+This sends one live, non-streaming `/v1/responses` request for **every entry in
+`[routes]`**, using its `id` as the requested model. For the Fireworks file,
+that includes `stage`, `deep`, `deep_max`, and `cheap`. The TOML selects the
+route IDs to test; the running server supplies their routing policy, upstream
+settings, and credentials. Deploy the intended TOML first. This command does
+not deploy or check that the server's configuration matches the local file.
+
+By default it opens a temporary localhost port-forward to
+`daedalus/service/switchyard:4000` using `EXPECTED_CONTEXT` and closes it on
+completion or interruption. This requires Python 3.11+ and `kubectl` access to
+the deployed Service and pods. You can instead supply a reachable Switchyard
+URL (with or without `/v1`), which does not require `kubectl`:
+
+```bash
+make test routes_fireworks.toml TEST_BASE_URL=http://localhost:4000/v1
+make test routes_fireworks.toml TEST_TIMEOUT=180 TEST_MAX_OUTPUT_TOKENS=8192
+```
+
+The prompt asks for `OK`, with a default budget of 4096 output tokens to allow
+for reasoning and a 120-second HTTP timeout per route. These are real inference
+requests and use the deployed providers. No reasoning effort is sent, so each
+route keeps its configured default. A pass requires a completed response with
+nonempty assistant text; HTTP errors, incomplete/failed responses, invalid JSON,
+and empty output fail. Every route is attempted, with HTTP status, elapsed time,
+selected-model header, and a short response or error printed. Any failed route
+returns a nonzero exit status.
+
+`TEST_NAMESPACE` and `TEST_SERVICE` override the port-forward destination.
+The route tester's local HTTP-fixture tests run without provider credentials:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_route_smoke.py' -v
+```
+
 ## Build, publish, and deploy
 
 No official v0.2.0 container is assumed. Build the pinned upstream commit and

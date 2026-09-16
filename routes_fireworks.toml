@@ -8,24 +8,29 @@ base_url = "https://api.fireworks.ai/inference/v1"
 api_key_env = "FIREWORKS_API_KEY"
 extra_headers = { x-multi-turn-session-id = "agent_4201kws76rm3fgescz3cst711jp4", x-session-affinity = "agent_4201kws76rm3fgescz3cst711jp4" }
 
-[targets.strong]
-id = "fireworks-strong"
-model = "accounts/fireworks/models/deepseek-v4p1-flash"
-llm_client = "fireworks"
-extra_body = { reasoning = { effort = "high" }, truncation = "auto", reasoning_history = "interleaved" }
-
 [targets.weak]
 id = "fireworks-weak"
-model = "accounts/fireworks/models/glm-5p3-flash"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
-extra_body = { reasoning = { effort = "low" }, truncation = "auto", reasoning_history = "interleaved" }
+extra_body = { reasoning = { effort = "low" }, truncation = "auto", reasoning_history = "disabled" }
+
+[targets.strong]
+id = "fireworks-strong"
+model = "accounts/fireworks/routers/glm-5p3-fast"
+llm_client = "fireworks"
+extra_body = { reasoning = { effort = "high" }, truncation = "auto", reasoning_history = "disabled" }
 
 # Reserve maximum reasoning for explicitly selected difficult work or recovery.
 [targets.deep_max]
 id = "fireworks-deep-max"
-model = "accounts/fireworks/models/deepseek-v4p1-flash"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
-extra_body = { reasoning = { effort = "max" }, truncation = "auto", reasoning_history = "interleaved" }
+extra_body = { reasoning = { effort = "max" }, truncation = "auto", reasoning_history = "disabled" }
+
+[targets.cheap]
+id = "fireworks-cheap"
+model = "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b"
+llm_client = "fireworks"
 
 # ------------------------------------------------------------------------------
 [routes.stage]
@@ -52,5 +57,12 @@ reasoning = false
 id = "daedalus/max"
 type = "passthrough"
 target = "deep_max"
+tool_calling = true
+reasoning = false
+
+[routes.cheap]
+id = "daedalus/cheap"
+type = "passthrough"
+target = "cheap"
 tool_calling = true
 reasoning = false
