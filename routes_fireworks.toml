@@ -1,68 +1,120 @@
 schema_version = 1
 # ------------------------------------------------------------------------------
-# Routing IDs must be distinct; model is the provider's actual model ID.
-# Requires the target-model-aliases patch applied by this repository's Dockerfile.
 [llm_clients.fireworks]
-format = "openai_responses"
+# Keep the downstream Responses API; Switchyard translates it to Chat Completions.
+# Fireworks' GLM Responses stream stalled during the 2026-10-04 incident.
+format = "openai_chat"
 base_url = "https://api.fireworks.ai/inference/v1"
 api_key_env = "FIREWORKS_API_KEY"
-extra_headers = { x-multi-turn-session-id = "agent_4201kws76rm3fgescz3cst711jp4", x-session-affinity = "agent_4201kws76rm3fgescz3cst711jp4" }
+# Daedalus supplies an opaque, user-scoped conversation key in the `user` field.
+# Do not pin every user's traffic to one static session header.
 
-[targets.weak]
-id = "fireworks-weak"
+[targets.max]
+id = "max"
 model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
-extra_body = { reasoning = { effort = "low" }, truncation = "auto", reasoning_history = "disabled" }
+extra_body = { reasoning_effort = "max", reasoning_history = "interleaved" }
 
-[targets.strong]
-id = "fireworks-strong"
+[targets.xhigh]
+id = "xhigh"
 model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
-extra_body = { reasoning = { effort = "high" }, truncation = "auto", reasoning_history = "disabled" }
+extra_body = { reasoning_effort = "xhigh", reasoning_history = "interleaved" }
 
-# Reserve maximum reasoning for explicitly selected difficult work or recovery.
-[targets.deep_max]
-id = "fireworks-deep-max"
+[targets.high]
+id = "high"
 model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
-extra_body = { reasoning = { effort = "max" }, truncation = "auto", reasoning_history = "disabled" }
+extra_body = { reasoning_effort = "high", reasoning_history = "interleaved" }
 
-[targets.cheap]
-id = "fireworks-cheap"
-model = "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b"
+[targets.medium]
+id = "medium"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
+extra_body = { reasoning_effort = "medium", reasoning_history = "interleaved" }
 
+[targets.low]
+id = "low"
+model = "accounts/fireworks/routers/glm-5p3-fast"
+llm_client = "fireworks"
+extra_body = { reasoning_effort = "low", reasoning_history = "interleaved" }
+
+# ------------------------------------------------------------------------------
+[llm_clients.local]
+format = "openai_responses"
+base_url = "http://inference-gateway.daedalus-dynamo.svc.cluster.local:32359/v1"
+api_key_env = "LOCAL_API_KEY"
+
+[targets.local]
+id = "local"
+model = "nvidia/Muse-Glimmer-30B-NVFP4"
+llm_client = "local"
 # ------------------------------------------------------------------------------
 [routes.stage]
 id = "daedalus"
 type = "stage_router"
-capable_target = "strong"
-efficient_target = "weak"
+capable_target = "high"
+efficient_target = "low"
 picker = "capable_first"
 confidence_threshold = 0.5
 recent_turn_window = 3
 tool_calling = true
 reasoning = false
+# ------------------------------------------------------------------------------
+[routes.max]
+id = "daedalus/max"
+type = "passthrough"
+target = "max"
+tool_calling = true
+reasoning = false
 
-# Select this route for briefings, recaps, research, and diagnosis from the start.
-# Skill-based selection belongs to the caller; stage routing uses tool signals.
+[routes.xhigh]
+id = "daedalus/xhigh"
+type = "passthrough"
+target = "xhigh"
+tool_calling = true
+reasoning = false
+
+# Default deep alias in Daedalus's workflow; the deployed override uses /xhigh.
 [routes.deep]
 id = "daedalus/deep"
 type = "passthrough"
-target = "strong"
+target = "xhigh"
 tool_calling = true
 reasoning = false
 
-[routes.deep_max]
-id = "daedalus/max"
+[routes.high]
+id = "daedalus/high"
 type = "passthrough"
-target = "deep_max"
+target = "high"
 tool_calling = true
 reasoning = false
 
-[routes.cheap]
-id = "daedalus/cheap"
+[routes.medium]
+id = "daedalus/medium"
 type = "passthrough"
-target = "cheap"
+target = "medium"
+tool_calling = true
+reasoning = false
+
+[routes.low]
+id = "daedalus/low"
+type = "passthrough"
+target = "low"
+tool_calling = true
+reasoning = false
+
+[routes.none]
+id = "daedalus/none"
+type = "passthrough"
+# Compatibility alias: GLM 5.3 requires thinking. Keep in-turn tool reasoning.
+target = "low"
+tool_calling = true
+reasoning = false
+
+[routes.local]
+id = "daedalus/local"
+type = "passthrough"
+target = "local"
 tool_calling = true
 reasoning = false

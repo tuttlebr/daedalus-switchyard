@@ -5,23 +5,118 @@ alias patch and deploys it as a non-root Helm workload in the `daedalus`
 namespace. The default Fireworks route exposes model `daedalus` on the OpenAI
 Chat Completions, OpenAI Responses, and Anthropic Messages endpoints.
 
-`routes_fireworks.toml` uses the stage router with `efficient_first`: ordinary
-turns use the weak target; tool-result signals can escalate to the strong target.
-Both targets call Fireworks Nemotron 3 Ultra NVFP4 through the Responses API,
-with `medium` and `max` reasoning effort respectively.
+`routes_fireworks.toml` uses the stage router with `capable_first` and exposes
+explicit effort routes for GLM 5.3 Fast. All Fireworks targets use the same
+provider model, `accounts/fireworks/routers/glm-5p3-fast`. Fireworks describes
+[Fast](https://docs.fireworks.ai/serverless/serverless-modes) as a faster serving
+mode of the same model. Switchyard chooses an effort target; Fireworks chooses
+the inference replica. The `/local` route is a separate, explicitly requested
+Dynamo model.
+
+## Daedalus request path
+
+```mermaid
+flowchart LR
+  A[Daedalus Rust agent] -->|Responses API| B[Switchyard]
+  B -->|daedalus: stage policy| C[high or low effort]
+  B -->|deep / xhigh / max / other explicit route| D[fixed effort target]
+  C --> E[Fireworks GLM 5.3 Fast: Chat Completions]
+  D --> E
+  B -->|daedalus/local| F[Local Dynamo: Responses API]
+```
+
+Switchyard translates Responses input, tool calls/results, reasoning history,
+and streamed output to and from Chat Completions. The downstream agent keeps
+using `/v1/responses`; it does not need a Fireworks-specific provider adapter.
+During the October 4, 2026 incident, direct GLM Responses streams stalled while
+Chat Completions completed, so this upstream transport is intentional.
+
+| Requested model | Switchyard target | Requested Fireworks effort | Use |
+| --- | --- | --- | --- |
+| `daedalus` | Stage policy: normally `high`, sometimes `low` | `high` / `low` | Automatic/default profile |
+| `daedalus/deep`, `daedalus/xhigh` | `xhigh` | `xhigh` | Deep profile; daily summaries and mapped skills |
+| `daedalus/max` | `max` | `max` | Explicit `deep_max` profile |
+| `daedalus/high` | `high` | `high` | Fixed high effort |
+| `daedalus/medium` | `medium` | `medium` | Fixed requested medium effort |
+| `daedalus/low` | `low` | `low` | Explicit latency-oriented choice |
+| `daedalus/none` | `low` | `low` | Compatibility alias; thinking remains enabled |
+| `daedalus/local` | `local` | N/A | `nvidia/Muse-Glimmer-30B-NVFP4` on local Dynamo |
+
+The effort column describes the value sent on the wire. Live GLM probes accepted
+`low`, `medium`, `high`, `xhigh`, and `max` on October 6, 2026; that does not prove
+five distinct internal compute tiers. The provider explicitly rejected `none`
+because GLM 5.3 is thinking-only. `/none` therefore aliases `/low` and preserves
+reasoning between tool calls within the current user turn. It does not send
+`reasoning_effort="none"` or discard in-turn reasoning.
+
+Daedalus selects profiles before Switchyard selects targets. Explicit request
+profiles take precedence. With automatic selection, daily-summary requests
+start deep; loading `daily-summary`, `fantasy-football-recap`, `sre-engineer`, or
+`kubernetes-specialist` promotes subsequent rounds to deep. `deep_max` is
+explicit only. The deployed deep override is `daedalus/xhigh`; the workflow's
+fallback `daedalus/deep` resolves to the same target. These choices do not change
+tools, approval authority, timeouts, or iteration budgets.
+
+### What the stage router actually does
+
+The pinned Switchyard stage router reads coding-tool signals, not prompt
+complexity. It does not make an additional classifier-model call in this
+configuration. `capable_first` selects `high` when signals are absent or
+inconclusive. Critical errors or a recognized compaction marker force high.
+Passing tests plus recent recognized writes/edits and no recent error select
+low. Other decisions use a weighted error/production score, with threshold
+`0.5` and a window of three recent tool results/calls; the threshold is not a
+calibrated probability of task success.
+
+Most Daedalus research/MCP tools do not match the coding write/edit patterns.
+The October 6 audit found all 850 default-route requests in the preceding
+24 hours selected high. Treat the default as quality-first, not as a semantic
+cheap-versus-hard classifier. Explicit effort routes bypass stage decisions.
+There is no configured provider failover, and Fireworks failures never silently
+send the request to the local model. Daedalus owns its bounded model retries.
+
+An isolated October 6 comparison kept the deployed binary/model and changed
+only the picker to `efficient_first` and threshold to `0.3`. Twenty synthetic
+tasks with two paired repetitions covered no-tool answers, single/independent/
+dependent reads, tool-error recovery, and long context. The all-attempt
+gateway-loop p50/p95 were 5.72s/25.71s for the current policy and 7.98s/36.36s
+for low-first. Exact answer/format assertions passed 28/40 and 29/40,
+respectively, but low-first failed six cases the baseline passed. Both arms
+had format failures, and the small sample does not establish general model
+quality. Low-first failed the frozen correctness and latency gates and was
+not promoted. The deployed default remains `capable_first` at `0.5`.
+
+### Conversation affinity and defaults
+
+The Rust agent sends the standard OpenAI-compatible `user` field as a SHA-256
+key scoped to the authenticated user and conversation. All model/tool rounds
+and later turns in that conversation reuse it; requests without a conversation
+use a run-scoped key. Raw user/conversation IDs are not sent in this field.
+Switchyard preserves it through Responses-to-Chat translation.
+
+Fireworks supports [`user` for prompt-cache affinity](https://docs.fireworks.ai/guides/prompt-caching).
+Do not add one fixed `x-session-affinity`, `x-multi-turn-session-id`, or Dynamo
+session ID to `llm_clients.extra_headers`. A fixed key groups unrelated traffic
+onto one affinity destination. Clients that explicitly send per-session
+headers are still supported; Fireworks prioritizes
+[`x-multi-turn-session-id`](https://docs.fireworks.ai/guides/rollout-inference)
+over `x-session-affinity`. Affinity improves the opportunity for prefix reuse;
+cache hits still depend on exact prompt prefixes, replica placement, and load.
+
+Target defaults are illustrated below:
 
 ```toml
-[targets.strong]
-id = "fireworks-strong"
-model = "accounts/fireworks/models/nemotron-3-ultra-nvfp4"
+[targets.high]
+id = "high"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
-extra_body = { reasoning = { effort = "max" }, truncation = "auto", reasoning_history = "interleaved" }
+extra_body = { reasoning_effort = "high", reasoning_history = "interleaved" }
 
-[targets.weak]
-id = "fireworks-weak"
-model = "accounts/fireworks/models/nemotron-3-ultra-nvfp4"
+[targets.low]
+id = "low"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
-extra_body = { reasoning = { effort = "medium" }, truncation = "auto", reasoning_history = "interleaved" }
+extra_body = { reasoning_effort = "low", reasoning_history = "interleaved" }
 ```
 
 `id` identifies the routing target. The optional `model` names the model sent to
@@ -34,18 +129,15 @@ source. **Rebuild the image before deploying this Fireworks configuration**;
 the unpatched image rejects the new `model` field.
 
 Switchyard treats `extra_body` as a default-only, shallow top-level merge. An
-explicit `reasoning` object in the inbound request wins. The route advertises
+explicit reasoning effort in the inbound request wins after translation to
+`reasoning_effort`. The route advertises
 `reasoning = false` so clients using discovery do not automatically supply an
 effort that overrides the selected target.
 
-The Fireworks targets use native Responses fields. Fireworks' [NIM compatibility
-guide](https://docs.fireworks.ai/tools-sdks/nim-compatibility) documents that
-unrecognized `chat_template_kwargs` keys are discarded. The targets therefore
-omit `medium_effort`, `truncate_history_thinking`, and `force_nonempty_content`.
-
-NAT's `INFO` message beginning “Expecting generate request payloads” describes
-its inbound workflow schema at startup. It is not a provider validation error,
-and does not require changing these upstream targets to Chat Completions.
+The Fireworks targets use native Chat Completions fields. Do not add the
+Responses-only `truncation` field to their `extra_body`: Fireworks rejects it
+on Chat Completions. Switchyard translates the downstream Responses request
+before applying these target defaults.
 
 ## Files
 
@@ -72,13 +164,15 @@ This lints the chart, renders it into the `daedalus` namespace, and runs
 Kubernetes client-side validation. Route policy is intentionally not validated,
 so the selected routes file can be changed freely while experimenting.
 
-The optional integration tests inspect actual upstream request bodies using a
-local mock, including both effort tiers, streaming tool history, escalation,
-and caller overrides. They do not contact Fireworks:
+The transport tests use a built binary and a local mock to check both stage
+defaults, critical-error escalation, every Fireworks route, buffered/streaming
+Responses, tool history, caller effort overrides, open argument schemas, and
+conversation affinity. Configuration invariants and the route smoke harness
+also run. The mocks do not contact Fireworks:
 
 ```bash
-docker build -t switchyard:fireworks-schema-test .
-SWITCHYARD_TEST_IMAGE=switchyard:fireworks-schema-test python3 -m unittest discover -s tests -v
+SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
+  python3 -m unittest discover -s tests -v
 ```
 
 ## Test deployed routes
@@ -92,7 +186,8 @@ make test ROUTES_FILE=routes_local.toml
 
 This sends one live, non-streaming `/v1/responses` request for **every entry in
 `[routes]`**, using its `id` as the requested model. For the Fireworks file,
-that includes `stage`, `deep`, `deep_max`, and `cheap`. The TOML selects the
+that includes `stage`, `max`, `xhigh`, `deep`, `high`, `medium`, `low`, `none`, and `local`.
+The TOML selects the
 route IDs to test; the running server supplies their routing policy, upstream
 settings, and credentials. Deploy the intended TOML first. This command does
 not deploy or check that the server's configuration matches the local file.
@@ -198,7 +293,7 @@ curl http://switchyard.daedalus.svc.cluster.local:4000/v1/responses \
   -d '{"model":"daedalus","input":"Inspect and fix the failing tests."}'
 ```
 
-Every routed response includes `x-model-router-selected-model` and
+Routed responses include `x-model-router-selected-model` and, when available,
 `x-model-router-rationale`. With the Fireworks aliases, the selected-model
-header distinguishes `fireworks-weak` from `fireworks-strong`; the request sent
+header identifies the target, such as `high`, `low`, or `xhigh`; the request sent
 to Fireworks uses the full provider model ID from `model`.
