@@ -13,7 +13,7 @@ NAMESPACE="daedalus"
 RELEASE_NAME="${RELEASE_NAME:-switchyard}"
 SECRET_NAME="${SECRET_NAME:-switchyard-api-key}"
 EXPECTED_CONTEXT="${EXPECTED_CONTEXT:-kubernetes-admin@kubernetes}"
-IMAGE_TAG="${IMAGE_TAG:-v0.2.0}"
+IMAGE_TAG="${IMAGE_TAG:-v0.3.0}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
 
 for command_name in helm kubectl python3; do

@@ -1,0 +1,124 @@
+diff --git a/crates/libsy-llm-client/src/client.rs b/crates/libsy-llm-client/src/client.rs
+--- a/crates/libsy-llm-client/src/client.rs
++++ b/crates/libsy-llm-client/src/client.rs
+@@ -286,6 +286,7 @@
+             enable_anthropic_prompt_caching(&mut body);
+         }
+         if matches!(backend, Backend::OpenAiChat(_)) {
++            normalize_fireworks_chat_reasoning(&mut body, backend)?;
+             ensure_openai_stream_usage(&mut body);
+         }
+         let streaming = endpoint.allows_streaming()
+@@ -927,6 +928,61 @@
+ }
+
+ // Overwrites the outbound body's `model` field with the resolved model id.
++// Fireworks accepts historical thinking as `reasoning_content`, while the generic
++// Chat encoder emits `reasoning`. Preserve the text on tool continuations without
++// changing other providers' representations or discarding opaque reasoning.
++fn normalize_fireworks_chat_reasoning(body: &mut Value, backend: &Backend) -> Result<()> {
++    let fireworks_model = body
++        .get("model")
++        .and_then(Value::as_str)
++        .is_some_and(|model| model.starts_with("accounts/fireworks/"));
++    let fireworks_host = reqwest::Url::parse(&backend.url())
++        .ok()
++        .is_some_and(|url| url.host_str() == Some("api.fireworks.ai"));
++    if !fireworks_model && !fireworks_host {
++        return Ok(());
++    }
++    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
++        return Ok(());
++    };
++    for message in messages {
++        let Some(message) = message.as_object_mut() else {
++            continue;
++        };
++        if message.get("role").and_then(Value::as_str) != Some("assistant") {
++            continue;
++        }
++        if let Some(details) = message.remove("reasoning_details") {
++            if !details.is_null() && details != json!([]) {
++                return Err(LlmClientError::InvalidRequest {
++                    message: "Fireworks Chat cannot represent structured reasoning details"
++                        .to_string(),
++                });
++            }
++        }
++        let Some(reasoning) = message.remove("reasoning") else {
++            continue;
++        };
++        if reasoning.is_null() {
++            continue;
++        }
++        if !reasoning.is_string() {
++            return Err(LlmClientError::InvalidRequest {
++                message: "Fireworks Chat requires plaintext reasoning_content".to_string(),
++            });
++        }
++        if let Some(existing) = message.get("reasoning_content") {
++            if !existing.is_null() && existing != &reasoning {
++                return Err(LlmClientError::InvalidRequest {
++                    message: "Fireworks Chat received conflicting reasoning fields".to_string(),
++                });
++            }
++        }
++        message.insert("reasoning_content".to_string(), reasoning);
++    }
++    Ok(())
++}
++
+ fn set_json_model(body: &mut Value, model: &str) {
+     if let Value::Object(object) = body {
+         object.insert("model".to_string(), Value::String(model.to_string()));
+@@ -1390,6 +1446,50 @@
+     }
+
+     #[test]
++    fn fireworks_chat_reasoning_preserves_text_for_host_and_model_detection() {
++        for (url, model) in [
++            (
++                "https://api.fireworks.ai/inference/v1",
++                "accounts/custom/models/test",
++            ),
++            ("http://localhost/v1", "accounts/fireworks/routers/test"),
++        ] {
++            let backend = Backend::OpenAiChat(config(url));
++            let mut body = json!({"model": model, "messages": [
++                {"role": "assistant", "reasoning": "fixture thought", "content": null,
++                 "tool_calls": [{"id": "call_fixture"}]}
++            ]});
++            normalize_fireworks_chat_reasoning(&mut body, &backend).unwrap();
++            assert_eq!(body["messages"][0]["reasoning_content"], "fixture thought");
++            assert!(body["messages"][0].get("reasoning").is_none());
++            assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "call_fixture");
++        }
++    }
++
++    #[test]
++    fn other_providers_keep_their_chat_reasoning_representation() {
++        let backend = Backend::OpenAiChat(config("https://openrouter.ai/api/v1"));
++        let mut body = json!({"model": "z-ai/glm", "messages": [
++            {"role": "assistant", "reasoning": "fixture thought"}
++        ]});
++        let original = body.clone();
++        normalize_fireworks_chat_reasoning(&mut body, &backend).unwrap();
++        assert_eq!(body, original);
++    }
++
++    #[test]
++    fn fireworks_chat_does_not_discard_conflicting_or_structured_reasoning() {
++        let backend = Backend::OpenAiChat(config("https://api.fireworks.ai/inference/v1"));
++        for message in [
++            json!({"role": "assistant", "reasoning": "first", "reasoning_content": "second"}),
++            json!({"role": "assistant", "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}]}),
++        ] {
++            let mut body = json!({"model": "glm", "messages": [message]});
++            assert!(normalize_fireworks_chat_reasoning(&mut body, &backend).is_err());
++        }
++    }
++
++    #[test]
+     fn provider_endpoint_urls_preserve_query_and_fragment() {
+         let invalid_url = "not a URL/";
+         let backend = Backend::OpenAiResponses(config(invalid_url));

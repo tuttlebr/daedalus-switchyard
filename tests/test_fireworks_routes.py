@@ -1,8 +1,9 @@
 """Deployment invariants; the built-binary wire tests live alongside these."""
 
-from pathlib import Path
-import tomllib
 import unittest
+from pathlib import Path
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,6 +20,13 @@ class FireworksRoutesTest(unittest.TestCase):
             for key in ("target", "capable_target", "efficient_target"):
                 if key in route:
                     self.assertIn(route[key], targets)
+            if route["type"] == "composite":
+                if route["classifier"].get("type", "llm") == "llm":
+                    self.assertIn(route["classifier"]["target"], targets)
+                for key in ("capable_target", "efficient_target"):
+                    self.assertIn(route["stage"][key], targets)
+                for choice in route["classifier"].get("choices", {}).values():
+                    self.assertIn(choice["target"], targets)
 
     def test_no_shared_session_identity_or_responses_only_fireworks_defaults(self):
         config = tomllib.loads((ROOT / "routes_fireworks.toml").read_text())
@@ -31,6 +39,36 @@ class FireworksRoutesTest(unittest.TestCase):
             if target["llm_client"] == "fireworks":
                 self.assertNotIn("truncation", target.get("extra_body", {}))
                 self.assertNotEqual(target["extra_body"]["reasoning_effort"], "none")
+
+    def test_optional_native_credential_is_discovered_for_deployment(self):
+        import importlib.util
+        import tempfile
+
+        spec = importlib.util.spec_from_file_location(
+            "key_envs", ROOT / "scripts/list_api_key_envs.py"
+        )
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "routes.toml"
+            source = (ROOT / "routes_fireworks.toml").read_text()
+            path.write_text(
+                source.replace(
+                    'type = "decision_api"',
+                    'type = "decision_api"\napi_key_env = "DECISION_API_KEY"',
+                )
+            )
+            self.assertEqual(
+                helper.api_key_environment_names(path),
+                ["DECISION_API_KEY", "FIREWORKS_API_KEY", "LOCAL_API_KEY"],
+            )
+            path.write_text(
+                path.read_text().replace(
+                    'api_key_env = "DECISION_API_KEY"', 'api_key_env = "invalid-key"'
+                )
+            )
+            with self.assertRaises(ValueError):
+                helper.api_key_environment_names(path)
 
 
 if __name__ == "__main__":

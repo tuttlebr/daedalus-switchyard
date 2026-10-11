@@ -3,9 +3,9 @@ SHELL := /bin/bash
 
 CHART_DIR := charts/switchyard
 ROUTES_FILE ?= routes_fireworks.toml
-SWITCHYARD_COMMIT := 1fc9ab887d1c663b0048ae24d5f473d15ed8daaa
+SWITCHYARD_COMMIT := 336196f6fbfc97ddc71c1700f6092e564e9f23c2
 IMAGE_REPOSITORY ?= daedalus.ddns.me:5050/btuttle/switchyard
-IMAGE_TAG ?= v0.2.0
+IMAGE_TAG ?= v0.3.0
 LOCAL_IMAGE ?= $(IMAGE_REPOSITORY):$(IMAGE_TAG)
 EXPECTED_CONTEXT ?= kubernetes-admin@kubernetes
 ROUTE_FILES := $(wildcard routes_*.toml)

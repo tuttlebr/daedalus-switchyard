@@ -1,0 +1,1344 @@
+diff --git a/crates/libsy/src/algorithms/composite.rs b/crates/libsy/src/algorithms/composite.rs
+index bd86e8c..0c31d0e 100644
+--- a/crates/libsy/src/algorithms/composite.rs
++++ b/crates/libsy/src/algorithms/composite.rs
+@@ -16,13 +16,13 @@ use super::fall_through::FallThrough;
+ use super::llm_class::{LlmClassifierConfig, LlmTaskClassifier, TaskClassifierConfig};
+ use super::stage::{StageRouterConfig, build_stage_route};
+ use super::util::affinity::{ClassifyTrigger, evict_if_full, has_new_user_turn, retention_key};
+-use super::util::stage::{Tier, set_fall_open};
++use super::util::stage::{Tier, set_fall_open, set_task_target};
+ use crate::core::algorithm::{Algorithm, Driver, RoutingIdentity};
+ use crate::core::classifier::Classifier;
+ use crate::core::processor::{Event, Processor};
+ use crate::core::state::State;
+ use crate::{LibsyError, Result};
+-use switchyard_protocol::{Category, Request};
++use switchyard_protocol::{Category, ModelId, Request};
+ 
+ const COMPOSITE: &str = "composite";
+ 
+@@ -35,7 +35,8 @@ struct TierSetter {
+     judge: Arc<dyn Classifier<State>>,
+     trigger: ClassifyTrigger,
+     message_hash_fallback: bool,
+-    tiers: Mutex<HashMap<RoutingIdentity, Tier>>,
++    retain_target: bool,
++    tiers: Mutex<HashMap<RoutingIdentity, (Tier, Option<ModelId>)>>,
+ }
+ 
+ impl TierSetter {
+@@ -61,14 +62,14 @@ impl TierSetter {
+         }
+     }
+ 
+-    fn retain(&self, identity: RoutingIdentity, tier: Tier) {
++    fn retain(&self, identity: RoutingIdentity, tier: Tier, target: Option<ModelId>) {
+         let mut tiers = self.tiers.lock();
+         // A user turn re-decides, so it overwrites. A session keeps its first verdict,
+         // matching how affinity retains an assignment.
+         let writable = self.trigger == ClassifyTrigger::UserTurn || !tiers.contains_key(&identity);
+         if writable {
+             evict_if_full(&mut tiers);
+-            tiers.insert(identity, tier);
++            tiers.insert(identity, (tier, target));
+         }
+     }
+ }
+@@ -99,27 +100,50 @@ impl Processor<State> for TierSetter {
+             };
+             // We use the classifier face, bypassing its standalone capable
+             // fallback. Invalid/absent verdicts must not become efficient.
+-            let tier = classification
++            let winner = classification
+                 .map(|classification| classification.argmax(false))
+                 .transpose()?
+-                .flatten()
+-                .and_then(|winner| Self::tier_for(winner.category))
++                .flatten();
++            let tier = winner
++                .as_ref()
++                .and_then(|winner| Self::tier_for(winner.category.clone()))
+                 .unwrap_or(Tier::Capable);
++            let target = if self.retain_target {
++                Some(
++                    winner
++                        .as_ref()
++                        .map(|winner| winner.target.clone())
++                        .filter(|target| driver.models_for(&Category::Any).contains(target))
++                        .unwrap_or(driver.first_model_for(&Category::Capable)?.clone()),
++                )
++            } else {
++                None
++            };
+             set_fall_open(state, tier);
++            if let Some(target) = &target {
++                set_task_target(state, target);
++            }
+             if let Some(identity) = identity {
+-                self.retain(identity, tier);
++                self.retain(identity, tier, target);
+             }
+             return Ok(());
+         }
+         // A continuation uses the retained tier rather than the picker default.
+-        if let Some(tier) = identity.and_then(|identity| self.tiers.lock().get(&identity).copied())
++        if let Some((tier, target)) =
++            identity.and_then(|identity| self.tiers.lock().get(&identity).cloned())
+         {
+             set_fall_open(state, tier);
++            if let Some(target) = &target {
++                set_task_target(state, target);
++            }
+             driver.set_evidence_if_empty(serde_json::json!({"source": "retained"}));
+         } else {
+             // A continuation may arrive after restart/eviction or without an
+             // opening turn. Missing session state is not a medium verdict.
+             set_fall_open(state, Tier::Capable);
++            if self.retain_target {
++                set_task_target(state, driver.first_model_for(&Category::Capable)?);
++            }
+         }
+         Ok(())
+     }
+@@ -136,6 +160,7 @@ pub struct CompositeRouterConfig {
+ /// Runs a stage router with a tier the judge picks.
+ pub struct CompositeRouter {
+     route: FallThrough<State>,
++    retain_target: bool,
+ }
+ 
+ impl CompositeRouter {
+@@ -164,16 +189,60 @@ impl CompositeRouter {
+         let judge = LlmTaskClassifier::new(LlmClassifierConfig::Capability {
+             config: judge_config,
+         })?;
++        Self::with_classifier(
++            config.stage,
++            Arc::new(judge),
++            trigger,
++            message_hash_fallback,
++        )
++    }
++
++    /// Composes a native typed classifier with the existing stage and session policy.
++    pub fn with_classifier(
++        stage: StageRouterConfig,
++        judge: Arc<dyn Classifier<State>>,
++        trigger: ClassifyTrigger,
++        message_hash_fallback: bool,
++    ) -> Result<Self> {
++        Self::build(stage, judge, trigger, message_hash_fallback, false)
++    }
++
++    /// Retains the judge's named task target. Stage signals can escalate to capable,
++    /// but efficient signals return to the chosen target rather than a fixed tier.
++    pub fn with_target_classifier(
++        stage: StageRouterConfig,
++        judge: Arc<dyn Classifier<State>>,
++        trigger: ClassifyTrigger,
++    ) -> Result<Self> {
++        Self::build(stage, judge, trigger, false, true)
++    }
++
++    fn build(
++        stage: StageRouterConfig,
++        judge: Arc<dyn Classifier<State>>,
++        trigger: ClassifyTrigger,
++        message_hash_fallback: bool,
++        retain_target: bool,
++    ) -> Result<Self> {
++        if trigger == ClassifyTrigger::EveryRequest {
++            return Err(LibsyError::AlgorithmError {
++                message: "composite: classify_trigger must be user_turn or new_session".into(),
++            });
++        }
+         let setter = TierSetter {
+-            judge: Arc::new(judge),
++            judge,
+             trigger,
+             message_hash_fallback,
++            retain_target,
+             tiers: Mutex::new(HashMap::new()),
+         };
+-        let route = build_stage_route(config.stage)?
++        let route = build_stage_route(stage)?
+             .with_name(COMPOSITE)
+             .with_processor(Arc::new(setter));
+-        Ok(Self { route })
++        Ok(Self {
++            route,
++            retain_target,
++        })
+     }
+ }
+ 
+@@ -188,7 +257,16 @@ impl Algorithm for CompositeRouter {
+         driver: Driver,
+         request: Request,
+     ) -> Result<crate::RoutingOutcome> {
+-        self.route.execute(driver, request).await
++        let capable = driver.models_for(&Category::Capable).to_vec();
++        let mut outcome = self.route.execute(driver, request).await?;
++        if self.retain_target {
++            // Provider failure must not try every cheaper target in the choice pool.
++            let selected = outcome.selected_model_id()?.clone();
++            outcome
++                .selected_model_ids
++                .retain(|target| *target == selected || capable.contains(target));
++        }
++        Ok(outcome)
+     }
+ }
+ 
+@@ -278,13 +356,11 @@ mod tests {
+         ] {
+             let router = router()?;
+             let serve = move |target: ModelId, _request: Request| async move {
+-                Ok(crate::core::testing::reply(
+-                    if target == ModelId::from(JUDGE) {
+-                        verdict.to_string()
+-                    } else {
+-                        target.to_string()
+-                    },
+-                ))
++                Ok(crate::core::testing::reply(if target.as_str() == JUDGE {
++                    verdict.to_string()
++                } else {
++                    target.to_string()
++                }))
+             };
+             for request in [user_turn_request(), turn_request(false)] {
+                 let (selected, _) =
+@@ -315,7 +391,7 @@ mod tests {
+     async fn a_failed_judge_defaults_capable_and_does_not_break_the_tool_loop() -> Result<()> {
+         let router = router()?;
+         let serve = |target: ModelId, _request: Request| async move {
+-            if target == ModelId::from(JUDGE) {
++            if target.as_str() == JUDGE {
+                 Err(switchyard_protocol::LlmClientError::General(
+                     "judge fixture unavailable".into(),
+                 ))
+diff --git a/crates/libsy/src/algorithms/stage.rs b/crates/libsy/src/algorithms/stage.rs
+index c2f5762..40ce92a 100644
+--- a/crates/libsy/src/algorithms/stage.rs
++++ b/crates/libsy/src/algorithms/stage.rs
+@@ -22,7 +22,7 @@ use super::llm_class::{LlmClassifierConfig, LlmTaskClassifier, TaskClassifierCon
+ use super::util::prompts::prepend_system_prompt;
+ use super::util::stage::{
+     DecisionSource, HandoffNoteConfig, PickerMode, StageClassifier, Tier, fall_open_tier,
+-    record_decision_source, record_routing_decision,
++    record_decision_source, record_routing_decision, task_target,
+ };
+ use super::util::tool_signals::{DEFAULT_RECENT_WINDOW, ToolSemantics, ToolSignalProcessor};
+ use crate::core::algorithm::{Algorithm, Driver};
+@@ -108,7 +108,8 @@ impl Classifier<State> for FallOpen {
+             Tier::Capable => Category::Capable,
+             Tier::Efficient => Category::Efficient,
+         };
+-        let target = driver.first_model_for(&category)?.clone();
++        let target =
++            task_target(state, driver).unwrap_or(driver.first_model_for(&category)?.clone());
+         Ok((
+             Classification::Scores(vec![Score {
+                 target,
+diff --git a/crates/libsy/src/algorithms/util/stage.rs b/crates/libsy/src/algorithms/util/stage.rs
+index 2338f7b..8cb38c5 100644
+--- a/crates/libsy/src/algorithms/util/stage.rs
++++ b/crates/libsy/src/algorithms/util/stage.rs
+@@ -124,6 +124,26 @@ pub const DECISION_SOURCE_KEY: &str = "decision_source";
+ 
+ /// `State.extra` key under which a default-tier override is recorded.
+ const FALL_OPEN_KEY: &str = "fall_open";
++const TASK_TARGET_KEY: &str = "composite_task_target";
++
++/// Keeps a judge-selected task target as the floor for efficient stage decisions.
++pub(crate) fn set_task_target(state: &mut State, target: &switchyard_protocol::ModelId) {
++    state.extra.insert(
++        TASK_TARGET_KEY.into(),
++        StateValue::String(target.to_string()),
++    );
++}
++
++pub(crate) fn task_target(state: &State, driver: &Driver) -> Option<switchyard_protocol::ModelId> {
++    let StateValue::String(target) = state.extra.get(TASK_TARGET_KEY)? else {
++        return None;
++    };
++    driver
++        .models_for(&Category::Any)
++        .iter()
++        .find(|candidate| candidate.as_str() == target)
++        .cloned()
++}
+ 
+ /// Overrides the default tier undecided turns fall open to, until
+ /// [`clear_fall_open`] restores the picker's. Held in session state, so it
+@@ -637,7 +657,12 @@ impl Classifier<State> for StageClassifier {
+                     Tier::Capable => Category::Capable,
+                     Tier::Efficient => Category::Efficient,
+                 };
+-                let target = driver.first_model_for(&category)?;
++                let target = if tier == Tier::Efficient {
++                    task_target(state, driver)
++                } else {
++                    None
++                }
++                .unwrap_or(driver.first_model_for(&category)?.clone());
+                 if tier == Tier::Capable
+                     && matches!(
+                         source,
+@@ -647,7 +672,7 @@ impl Classifier<State> for StageClassifier {
+                     self.set_capable_hold(state, &capable_hold_key);
+                 }
+                 record_decision_source(state, source);
+-                record_routing_decision(source, target);
++                record_routing_decision(source, &target);
+                 if source == DecisionSource::Override
+                     && let Some(reason) = override_reason(&signal)
+                 {
+diff --git a/crates/libsy/src/core/algorithm.rs b/crates/libsy/src/core/algorithm.rs
+index 1198092..bfb1814 100644
+--- a/crates/libsy/src/core/algorithm.rs
++++ b/crates/libsy/src/core/algorithm.rs
+@@ -227,7 +227,7 @@ impl Driver {
+     }
+ 
+     /// Supply fallback evidence without replacing a decision made earlier in the cascade.
+-    pub(crate) fn set_evidence_if_empty(&self, evidence: Value) {
++    pub fn set_evidence_if_empty(&self, evidence: Value) {
+         let mut current = self.evidence.lock();
+         if current.is_none() {
+             *current = Some(evidence);
+diff --git a/crates/switchyard-runner/Cargo.toml b/crates/switchyard-runner/Cargo.toml
+index 3a80b61..4f946d2 100644
+--- a/crates/switchyard-runner/Cargo.toml
++++ b/crates/switchyard-runner/Cargo.toml
+@@ -17,6 +17,7 @@ publish = ["crates-io"]
+ prefill-router = ["dep:prefill-router"]
+ 
+ [dependencies]
++async-trait.workspace = true
+ libsy = { package = "switchyard-libsy", path = "../libsy", version = "0.3.0" }
+ prefill-router = { workspace = true, optional = true }
+ reqwest.workspace = true
+diff --git a/crates/switchyard-runner/src/algorithm.rs b/crates/switchyard-runner/src/algorithm.rs
+index e742d48..fe470bf 100644
+--- a/crates/switchyard-runner/src/algorithm.rs
++++ b/crates/switchyard-runner/src/algorithm.rs
+@@ -9,6 +9,7 @@ use std::fmt::{Display, Formatter};
+ use std::path::PathBuf;
+ use std::sync::Arc;
+ 
++use crate::decision_api::{DecisionClassifier, DecisionClassifierConfig};
+ use libsy::{
+     AdvisorGate, AdvisorGateConfig, Algorithm, ClassifierContractConfig, ClassifierResponseFormat,
+     ClassifyTrigger, CompositeRouter, CompositeRouterConfig, CustomClassifierConfig,
+@@ -17,7 +18,7 @@ use libsy::{
+     PlanExecute, PlanExecuteConfig, Random, StageRouter, StageRouterConfig, SubagentRouter,
+     SubagentRouterConfig, TaskClassifierConfig, ToolSemantics,
+ };
+-use serde::Deserialize;
++use serde::{Deserialize, Deserializer};
+ use switchyard_protocol::{Category, ModelId};
+ 
+ /// Error returned when an algorithm description cannot be constructed.
+@@ -28,7 +29,7 @@ pub struct AlgorithmConfigError {
+ }
+ 
+ impl AlgorithmConfigError {
+-    fn new(message: impl Into<String>) -> Self {
++    pub(crate) fn new(message: impl Into<String>) -> Self {
+         Self {
+             message: message.into(),
+             source: None,
+@@ -378,7 +379,7 @@ pub enum AlgorithmSpec {
+     /// A judge picks the tier at each user turn; a stage router runs the turns within it.
+     Composite {
+         /// Judge that picks the tier. Called through its own target.
+-        classifier: StageClassifierConfig,
++        classifier: CompositeClassifierConfig,
+         /// The stage router the judge hands off to.
+         stage: StageTierConfig,
+         /// Separate policy for delegated sub-agent work.
+@@ -492,6 +493,47 @@ pub struct StageClassifierConfig {
+     pub max_output_tokens: u64,
+ }
+ 
++/// Either the existing LLM capability judge or a native SystemOne decision judge.
++#[derive(Clone, Debug)]
++pub enum CompositeClassifierConfig {
++    /// Existing schema-generating judge; also the default when `type` is absent.
++    Llm(StageClassifierConfig),
++    /// Native `/v1/systemone` choice probabilities, without generated verdict text.
++    DecisionApi(DecisionClassifierConfig),
++}
++
++impl<'de> Deserialize<'de> for CompositeClassifierConfig {
++    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
++        let mut table = toml::Table::deserialize(deserializer)?;
++        let kind = table.remove("type");
++        match kind.as_ref().and_then(toml::Value::as_str) {
++            None if kind.is_none() => StageClassifierConfig::deserialize(toml::Value::Table(table))
++                .map(Self::Llm)
++                .map_err(serde::de::Error::custom),
++            Some("llm") => StageClassifierConfig::deserialize(toml::Value::Table(table))
++                .map(Self::Llm)
++                .map_err(serde::de::Error::custom),
++            Some("decision_api") => {
++                DecisionClassifierConfig::deserialize(toml::Value::Table(table))
++                    .map(Self::DecisionApi)
++                    .map_err(serde::de::Error::custom)
++            }
++            _ => Err(serde::de::Error::custom(
++                "composite classifier type must be llm or decision_api",
++            )),
++        }
++    }
++}
++
++impl CompositeClassifierConfig {
++    fn target(&self) -> Option<&str> {
++        match self {
++            Self::Llm(c) => Some(&c.target),
++            Self::DecisionApi(_) => None,
++        }
++    }
++}
++
+ /// The tier pair and scoring settings shared by every stage-router-backed route.
+ ///
+ /// `deny_unknown_fields` here is what rejects a typo on a flattened `stage_router`
+@@ -590,12 +632,17 @@ impl AlgorithmSpec {
+                 efficient_target,
+             } => vec![capable_target.as_str(), efficient_target.as_str()],
+             Self::Composite {
+-                stage, subagents, ..
++                classifier,
++                stage,
++                subagents,
+             } => {
+                 let mut names = vec![
+                     stage.capable_target.as_str(),
+                     stage.efficient_target.as_str(),
+                 ];
++                if let CompositeClassifierConfig::DecisionApi(c) = classifier {
++                    names.extend(c.choices.values().map(|choice| choice.target.as_str()));
++                }
+                 if let Some(subagents) = subagents {
+                     names.extend(subagents.routing_target_names());
+                 }
+@@ -639,7 +686,9 @@ impl AlgorithmSpec {
+                 ..
+             } => names.push(&classifier.target),
+             Self::Composite { classifier, .. } => {
+-                names.push(&classifier.target);
++                if let Some(target) = classifier.target() {
++                    names.push(target);
++                }
+             }
+             Self::Advisor { advisor_target, .. } => names.push(advisor_target),
+             _ => {}
+@@ -720,15 +769,25 @@ impl AlgorithmSpec {
+             ]),
+             Self::Composite {
+                 classifier, stage, ..
+-            } => category_models([
+-                (Category::Judge, vec![classifier.target.clone()]),
+-                (Category::Capable, vec![stage.capable_target.clone()]),
+-                (Category::Efficient, vec![stage.efficient_target.clone()]),
+-                (
+-                    Category::Any,
+-                    vec![stage.capable_target.clone(), stage.efficient_target.clone()],
+-                ),
+-            ]),
++            } => {
++                let mut names = vec![stage.capable_target.clone(), stage.efficient_target.clone()];
++                if let CompositeClassifierConfig::DecisionApi(c) = classifier {
++                    for choice in c.choices.values() {
++                        if !names.contains(&choice.target) {
++                            names.push(choice.target.clone());
++                        }
++                    }
++                }
++                category_models([
++                    (
++                        Category::Judge,
++                        classifier.target().map(str::to_owned).into_iter().collect(),
++                    ),
++                    (Category::Capable, vec![stage.capable_target.clone()]),
++                    (Category::Efficient, vec![stage.efficient_target.clone()]),
++                    (Category::Any, names),
++                ])
++            }
+             Self::Advisor {
+                 executor_target,
+                 advisor_target,
+@@ -783,6 +842,16 @@ impl AlgorithmSpec {
+         }
+     }
+ 
++    pub(crate) fn decision_api_key(&self) -> AlgorithmResult<Option<String>> {
++        match self {
++            Self::Composite {
++                classifier: CompositeClassifierConfig::DecisionApi(c),
++                ..
++            } => c.api_key(),
++            _ => Ok(None),
++        }
++    }
++
+     /// Builds this algorithm after resolving configured target names.
+     pub fn build(
+         &self,
+@@ -1349,11 +1418,30 @@ fn build_algorithm(
+             }
+             stage_config.tool_semantics = stage.tool_semantics.clone();
+             stage_config.handoff_notes = stage.handoff_notes.clone();
+-            let config = CompositeRouterConfig {
+-                judge: classifier.task_classifier_config(),
+-                stage: stage_config,
+-            };
+-            let algorithm = CompositeRouter::new(config).map_err(|error| {
++            let algorithm = match classifier {
++                CompositeClassifierConfig::Llm(c) => CompositeRouter::new(CompositeRouterConfig {
++                    judge: c.task_classifier_config(),
++                    stage: stage_config,
++                }),
++                CompositeClassifierConfig::DecisionApi(c) => {
++                    let judge = DecisionClassifier::new(c.clone(), targets)?;
++                    if c.choices.is_empty() {
++                        CompositeRouter::with_classifier(
++                            stage_config,
++                            Arc::new(judge),
++                            c.classify_trigger,
++                            false,
++                        )
++                    } else {
++                        CompositeRouter::with_target_classifier(
++                            stage_config,
++                            Arc::new(judge),
++                            c.classify_trigger,
++                        )
++                    }
++                }
++            }
++            .map_err(|error| {
+                 AlgorithmConfigError::with_source(
+                     format!("composite route {route_name}: {error}"),
+                     error,
+diff --git a/crates/switchyard-runner/src/config.rs b/crates/switchyard-runner/src/config.rs
+index 147d413..0b41aad 100644
+--- a/crates/switchyard-runner/src/config.rs
++++ b/crates/switchyard-runner/src/config.rs
+@@ -226,6 +226,13 @@ impl DeploymentConfig {
+                     ))
+                 })?;
+             }
++            if let Some(key) = config
++                .algorithm
++                .decision_api_key()
++                .map_err(|e| RunnerError::configuration(e.to_string()))?
++            {
++                provider_api_keys.push(key);
++            }
+             let capabilities = config.capabilities();
+             if capabilities.context_window == Some(0) {
+                 return Err(RunnerError::configuration(format!(
+@@ -1015,6 +1022,52 @@ new = ["send_message"]
+         )
+     }
+ 
++    #[test]
++    fn native_decision_composite_needs_no_llm_judge_target() -> RunnerResult<()> {
++        let source = format!(
++            r#"{VALID_CONFIG}
++[routes.native]
++id = "native-composite"
++type = "composite"
++[routes.native.classifier]
++type = "decision_api"
++base_url = "http://decision-api.daedalus.svc.cluster.local:30000/v1"
++model = "Cloudflare/clef-flash"
++instructions = "Select sufficient effort for the task."
++efficient_criteria = "Narrow tasks."
++capable_criteria = "Complex tasks."
++uncertain_criteria = "Insufficient evidence."
++[routes.native.stage]
++capable_target = "strong"
++efficient_target = "weak"
++confidence_threshold = 0.5
++"#
++        );
++        let runner = runner_from_toml(&source)?;
++        assert!(runner.models().any(|m| m.id.as_str() == "native-composite"));
++        let parsed: DeploymentConfig = toml::from_str(&source).unwrap();
++        assert_eq!(
++            parsed.routes["native"].callable_target_names(),
++            vec!["strong", "weak"]
++        );
++        assert!(
++            parsed.routes["native"]
++                .algorithm
++                .runtime_model_names("native")
++                .unwrap()
++                .parent[&Category::Judge]
++                .is_empty()
++        );
++        assert!(
++            runner_from_toml(&source.replace(
++                "uncertain_criteria = \"Insufficient evidence.\"",
++                "unknown_field = true"
++            ))
++            .is_err()
++        );
++        Ok(())
++    }
++
+     #[test]
+     fn composite_route_builds_and_claims_both_tiers_and_its_judge() -> RunnerResult<()> {
+         let runner = runner_from_toml(&composite_config())?;
+diff --git a/crates/switchyard-runner/src/decision_api.rs b/crates/switchyard-runner/src/decision_api.rs
+new file mode 100644
+index 0000000..0398d4f
+--- /dev/null
++++ b/crates/switchyard-runner/src/decision_api.rs
+@@ -0,0 +1,715 @@
++// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Native SystemOne decisions used to set a Composite task target.
++
++use std::collections::BTreeMap;
++use std::time::{Duration, Instant};
++
++use async_trait::async_trait;
++use libsy::{Classification, Classifier, ClassifyTrigger, Driver, Score, State};
++use serde::Deserialize;
++use serde_json::{Value, json};
++use switchyard_protocol::{Category, ContentBlock, ModelId, Request, Role};
++
++use crate::algorithm::AlgorithmConfigError;
++
++const QUESTION: &str = "effort";
++// Clef rounds every option probability to four decimal places.
++const ROUNDING_TOLERANCE: f64 = 0.0005;
++const MAX_RESPONSE_BYTES: usize = 65536;
++
++/// A named decision option mapped to an answering target.
++#[derive(Clone, Debug, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct DecisionTargetConfig {
++    /// Answering target name from the TOML targets table.
++    pub target: String,
++    /// Tasks for which this target is sufficient.
++    pub criteria: String,
++    /// Minimum probability of the winning option. Lower scores use the stage capable target.
++    #[serde(default = "default_threshold")]
++    pub min_probability: f64,
++}
++
++/// A native `/v1/systemone` choice classifier. Confidence is a routing score,
++/// not a calibrated probability of the answering model's task success.
++#[derive(Clone, Debug, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct DecisionClassifierConfig {
++    /// Service root, `/v1`, or full `/v1/systemone` URL.
++    pub base_url: String,
++    /// Served decision model, independent from the answering tier models.
++    pub model: String,
++    /// Optional server-owned bearer credential. Caller credentials are never forwarded.
++    #[serde(default)]
++    pub api_key_env: Option<String>,
++    /// Total deadline including response-body reads, in milliseconds.
++    #[serde(default = "default_timeout")]
++    pub timeout_ms: u64,
++    /// Minimum efficient-choice probability; ambiguous decisions remain capable.
++    #[serde(default)]
++    pub efficient_threshold: Option<f64>,
++    /// User-turn/session classification frequency. Hash fallback is unsupported.
++    #[serde(default = "default_trigger")]
++    pub classify_trigger: ClassifyTrigger,
++    /// Recent messages following the preserved opening task.
++    #[serde(default = "default_window")]
++    pub recent_turn_window: usize,
++    /// Maximum serialized request bytes. Oversized context is not silently truncated.
++    #[serde(default = "default_request_bytes")]
++    pub max_request_bytes: usize,
++    /// Server context ceiling. A response at the ceiling may have been truncated.
++    #[serde(default = "default_input_tokens")]
++    pub max_input_tokens: u64,
++    /// Instructions explaining what to decide; conversation content is untrusted data.
++    pub instructions: String,
++    /// Whole-task criteria for the efficient answering tier.
++    #[serde(default)]
++    pub efficient_criteria: String,
++    /// Whole-task criteria for the capable answering tier.
++    #[serde(default)]
++    pub capable_criteria: String,
++    /// Criteria for missing context or uncertainty.
++    pub uncertain_criteria: String,
++    /// Named target choices. Replaces the legacy efficient/capable criteria.
++    #[serde(default)]
++    pub choices: BTreeMap<String, DecisionTargetConfig>,
++}
++
++const fn default_timeout() -> u64 {
++    2000
++}
++const fn default_threshold() -> f64 {
++    0.9
++}
++const fn default_trigger() -> ClassifyTrigger {
++    ClassifyTrigger::UserTurn
++}
++const fn default_window() -> usize {
++    6
++}
++const fn default_request_bytes() -> usize {
++    12000
++}
++const fn default_input_tokens() -> u64 {
++    16384
++}
++
++impl DecisionClassifierConfig {
++    pub(crate) fn api_key(&self) -> Result<Option<String>, AlgorithmConfigError> {
++        self.api_key_env
++            .as_ref()
++            .map(|name| {
++                if name.is_empty()
++                    || !name.bytes().enumerate().all(|(i, b)| {
++                        b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit())
++                    })
++                {
++                    return Err(AlgorithmConfigError::new(
++                        "decision_api api_key_env must name an environment variable",
++                    ));
++                }
++                let key = std::env::var(name).map_err(|_| {
++                    AlgorithmConfigError::new(format!(
++                        "decision_api credential environment variable {name} is not set"
++                    ))
++                })?;
++                if key.trim().is_empty() {
++                    return Err(AlgorithmConfigError::new(format!(
++                        "decision_api credential environment variable {name} is empty"
++                    )));
++                }
++                Ok(key)
++            })
++            .transpose()
++    }
++
++    fn endpoint(&self) -> Result<reqwest::Url, AlgorithmConfigError> {
++        let mut url = reqwest::Url::parse(&self.base_url).map_err(|_| {
++            AlgorithmConfigError::new("decision_api base_url must be an absolute HTTP(S) URL")
++        })?;
++        if !matches!(url.scheme(), "http" | "https")
++            || url.host_str().is_none()
++            || !url.username().is_empty()
++            || url.password().is_some()
++            || url.query().is_some()
++            || url.fragment().is_some()
++        {
++            return Err(AlgorithmConfigError::new(
++                "decision_api base_url must be HTTP(S) without credentials, query or fragment",
++            ));
++        }
++        let path = url.path().trim_end_matches('/');
++        let path = if path.ends_with("/v1/systemone") {
++            path.to_owned()
++        } else if path.ends_with("/v1") {
++            format!("{path}/systemone")
++        } else {
++            format!("{path}/v1/systemone")
++        };
++        url.set_path(&path);
++        Ok(url)
++    }
++
++    fn validate(&self) -> Result<(), AlgorithmConfigError> {
++        let threshold = self.efficient_threshold.unwrap_or(default_threshold());
++        if !threshold.is_finite() || threshold <= 0.5 || threshold > 1.0 {
++            return Err(AlgorithmConfigError::new(
++                "decision_api efficient_threshold must be greater than 0.5 and at most 1",
++            ));
++        }
++        if self.timeout_ms == 0 || self.timeout_ms > 60000 {
++            return Err(AlgorithmConfigError::new(
++                "decision_api timeout_ms must be between 1 and 60000",
++            ));
++        }
++        if self.max_request_bytes == 0
++            || self.max_request_bytes > 65536
++            || self.max_input_tokens == 0
++        {
++            return Err(AlgorithmConfigError::new(
++                "decision_api input limits must be positive; max_request_bytes must be at most 65536",
++            ));
++        }
++        if self.recent_turn_window > 64 {
++            return Err(AlgorithmConfigError::new(
++                "decision_api recent_turn_window must be at most 64",
++            ));
++        }
++        if self.classify_trigger == ClassifyTrigger::EveryRequest {
++            return Err(AlgorithmConfigError::new(
++                "decision_api classify_trigger must be user_turn or new_session",
++            ));
++        }
++        for (name, value) in [
++            ("model", &self.model),
++            ("instructions", &self.instructions),
++            ("uncertain_criteria", &self.uncertain_criteria),
++        ] {
++            if value.trim().is_empty() {
++                return Err(AlgorithmConfigError::new(format!(
++                    "decision_api {name} must not be empty"
++                )));
++            }
++        }
++        if self.choices.is_empty() {
++            if self.efficient_criteria.trim().is_empty() || self.capable_criteria.trim().is_empty()
++            {
++                return Err(AlgorithmConfigError::new(
++                    "decision_api requires efficient_criteria and capable_criteria, or choices",
++                ));
++            }
++        } else {
++            if self.choices.len() < 2 || self.choices.contains_key("uncertain") {
++                return Err(AlgorithmConfigError::new(
++                    "decision_api choices requires at least two options; uncertain is reserved",
++                ));
++            }
++            if self.efficient_threshold.is_some()
++                || !self.efficient_criteria.is_empty()
++                || !self.capable_criteria.is_empty()
++            {
++                return Err(AlgorithmConfigError::new(
++                    "decision_api choices cannot be combined with legacy efficient/capable settings",
++                ));
++            }
++            for (name, choice) in &self.choices {
++                if name.trim().is_empty()
++                    || choice.target.trim().is_empty()
++                    || choice.criteria.trim().is_empty()
++                    || !choice.min_probability.is_finite()
++                    || !(0.0..=1.0).contains(&choice.min_probability)
++                {
++                    return Err(AlgorithmConfigError::new(
++                        "decision_api choices require names, targets, criteria and min_probability in [0, 1]",
++                    ));
++                }
++            }
++        }
++        Ok(())
++    }
++
++    fn criteria(&self) -> BTreeMap<String, String> {
++        if self.choices.is_empty() {
++            BTreeMap::from([
++                ("efficient".into(), self.efficient_criteria.clone()),
++                ("capable".into(), self.capable_criteria.clone()),
++                ("uncertain".into(), self.uncertain_criteria.clone()),
++            ])
++        } else {
++            let mut criteria: BTreeMap<_, _> = self
++                .choices
++                .iter()
++                .map(|(name, choice)| (name.clone(), choice.criteria.clone()))
++                .collect();
++            criteria.insert("uncertain".into(), self.uncertain_criteria.clone());
++            criteria
++        }
++    }
++}
++
++pub(crate) struct DecisionClassifier {
++    config: DecisionClassifierConfig,
++    endpoint: reqwest::Url,
++    client: reqwest::Client,
++    api_key: Option<String>,
++    targets: BTreeMap<String, ModelId>,
++}
++
++#[derive(Deserialize)]
++struct DecisionResponse {
++    model: String,
++    answers: BTreeMap<String, ChoiceAnswer>,
++    usage: DecisionUsage,
++}
++#[derive(Deserialize)]
++struct DecisionUsage {
++    input_tokens: u64,
++    output_tokens: u64,
++}
++#[derive(Deserialize)]
++#[serde(deny_unknown_fields)]
++struct ChoiceAnswer {
++    #[serde(rename = "type")]
++    kind: String,
++    choice: String,
++    confidence: f64,
++    probabilities: BTreeMap<String, f64>,
++}
++
++impl DecisionClassifier {
++    pub(crate) fn new(
++        config: DecisionClassifierConfig,
++        targets: &BTreeMap<String, ModelId>,
++    ) -> Result<Self, AlgorithmConfigError> {
++        config.validate()?;
++        let targets = config
++            .choices
++            .iter()
++            .map(|(name, choice)| {
++                targets
++                    .get(&choice.target)
++                    .cloned()
++                    .map(|target| (name.clone(), target))
++                    .ok_or_else(|| {
++                        AlgorithmConfigError::new(format!(
++                            "decision_api choice {name} refers to unknown target {}",
++                            choice.target
++                        ))
++                    })
++            })
++            .collect::<Result<BTreeMap<_, _>, _>>()?;
++        let endpoint = config.endpoint()?;
++        let api_key = config.api_key()?;
++        let client = reqwest::Client::builder()
++            .timeout(Duration::from_millis(config.timeout_ms))
++            .redirect(reqwest::redirect::Policy::none())
++            .build()
++            .map_err(|_| {
++                AlgorithmConfigError::new("could not initialize decision_api HTTP client")
++            })?;
++        Ok(Self {
++            config,
++            endpoint,
++            client,
++            api_key,
++            targets,
++        })
++    }
++
++    fn payload(&self, request: &Request) -> Result<Vec<u8>, &'static str> {
++        let llm = &request.llm_request;
++        let opening = llm
++            .messages
++            .iter()
++            .position(|m| m.role == Role::User)
++            .ok_or("missing_task")?;
++        let start = llm
++            .messages
++            .len()
++            .saturating_sub(self.config.recent_turn_window)
++            .max(opening + 1);
++        let indices = std::iter::once(opening).chain(start..llm.messages.len());
++        let mut messages = Vec::new();
++        for index in indices {
++            let message = &llm.messages[index];
++            let content = sanitized(&message.content)?;
++            if !content.is_empty() {
++                messages.push(json!({"role":message.role,"content":content}));
++            }
++        }
++        let mut instructions = Vec::new();
++        for instruction in &llm.instructions {
++            instructions
++                .push(json!({"role":instruction.role,"content":sanitized(&instruction.content)?}));
++        }
++        // System/developer messages can appear in messages rather than instructions.
++        for message in &llm.messages[..opening] {
++            if matches!(message.role, Role::System | Role::Developer) {
++                instructions
++                    .push(json!({"role":message.role,"content":sanitized(&message.content)?}));
++            }
++        }
++        let payload = json!({
++            "model":self.config.model,
++            "state":{
++                "client_instructions":instructions,
++                "messages":messages,
++                "available_tools":llm.tools.iter().map(|tool| &tool.name).collect::<Vec<_>>(),
++            },
++            "questions":{ QUESTION: {
++                "type":"choice",
++                "instructions":self.config.instructions,
++                "criteria":self.config.criteria()
++            }}
++        });
++        let body = serde_json::to_vec(&payload).map_err(|_| "invalid_input")?;
++        if body.len() > self.config.max_request_bytes {
++            return Err("input_too_large");
++        }
++        Ok(body)
++    }
++
++    async fn verdict(&self, body: Vec<u8>) -> Result<ChoiceAnswer, &'static str> {
++        let mut request = self
++            .client
++            .post(self.endpoint.clone())
++            .header("content-type", "application/json")
++            .body(body);
++        if let Some(key) = &self.api_key {
++            request = request.bearer_auth(key);
++        }
++        let mut response = request.send().await.map_err(|e| {
++            if e.is_timeout() {
++                "timeout"
++            } else {
++                "transport"
++            }
++        })?;
++        if !response.status().is_success() {
++            return Err("http_error");
++        }
++        if response
++            .content_length()
++            .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
++        {
++            return Err("response_too_large");
++        }
++        let mut bytes = Vec::new();
++        while let Some(chunk) = response.chunk().await.map_err(|e| {
++            if e.is_timeout() {
++                "timeout"
++            } else {
++                "transport"
++            }
++        })? {
++            if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
++                return Err("response_too_large");
++            }
++            bytes.extend_from_slice(&chunk);
++        }
++        let verdict: DecisionResponse =
++            serde_json::from_slice(&bytes).map_err(|_| "invalid_response")?;
++        if verdict.model != self.config.model
++            || verdict.answers.len() != 1
++            || verdict.usage.output_tokens != 0
++            || verdict.usage.input_tokens == 0
++            || verdict.usage.input_tokens >= self.config.max_input_tokens
++        {
++            return Err("invalid_response");
++        }
++        let answer = verdict
++            .answers
++            .into_iter()
++            .find(|(k, _)| k == QUESTION)
++            .ok_or("invalid_response")?
++            .1;
++        let options = self.config.criteria();
++        validate_answer(&answer, options.keys().map(String::as_str))?;
++        Ok(answer)
++    }
++}
++
++// Reasoning and opaque/media payloads do not cross into this text-only classifier.
++// Unsupported input or oversized preserved context defaults capable, never a
++// truncated or misleading efficient forecast. Answer requests retain all input.
++fn sanitized(blocks: &[ContentBlock]) -> Result<Vec<Value>, &'static str> {
++    let mut result = Vec::new();
++    for block in blocks {
++        match block {
++            ContentBlock::Reasoning { .. } => {}
++            ContentBlock::Text { .. }
++            | ContentBlock::Refusal { .. }
++            | ContentBlock::ToolCall(_) => {
++                result.push(serde_json::to_value(block).map_err(|_| "invalid_input")?);
++            }
++            ContentBlock::ToolResult(tool) => {
++                result.push(
++                    json!({"type":"tool_result","tool_call_id":tool.tool_call_id,
++                    "content":sanitized(&tool.content)?,"is_error":tool.is_error}),
++                );
++            }
++            _ => return Err("unsupported_input"),
++        }
++    }
++    Ok(result)
++}
++
++// SystemOne serving stacks can normalize `confidence` above chance or by entropy.
++// It is metadata, not the selected option's probability. Policy uses probabilities.
++fn validate_answer<'a>(
++    answer: &ChoiceAnswer,
++    options: impl Iterator<Item = &'a str>,
++) -> Result<(), &'static str> {
++    let options: Vec<_> = options.collect();
++    let valid_probability = |p: f64| p.is_finite() && (0.0..=1.0).contains(&p);
++    if answer.kind != "choice"
++        || !options.contains(&answer.choice.as_str())
++        || answer.probabilities.len() != options.len()
++        || options
++            .iter()
++            .any(|key| !answer.probabilities.contains_key(*key))
++        || !valid_probability(answer.confidence)
++        || answer
++            .probabilities
++            .values()
++            .any(|p| !valid_probability(*p))
++    {
++        return Err("invalid_distribution");
++    }
++    let sum_tolerance = ROUNDING_TOLERANCE.max(options.len() as f64 * 0.00005 + 1e-9);
++    if (answer.probabilities.values().sum::<f64>() - 1.0).abs() > sum_tolerance
++        || answer
++            .probabilities
++            .values()
++            .any(|p| *p > answer.probabilities[&answer.choice] + ROUNDING_TOLERANCE)
++    {
++        return Err("invalid_distribution");
++    }
++    Ok(())
++}
++
++#[async_trait]
++impl Classifier<State> for DecisionClassifier {
++    async fn score(
++        &self,
++        _state: &mut State,
++        request: &mut Request,
++        driver: &Driver,
++    ) -> libsy::Result<(Classification, Option<switchyard_protocol::Response>)> {
++        let started = Instant::now();
++        let result = match self.payload(request) {
++            Ok(body) => self.verdict(body).await,
++            Err(reason) => Err(reason),
++        };
++        let mut selected_target = None;
++        let category = match result {
++            Ok(answer) => {
++                let efficient = if self.config.choices.is_empty() {
++                    let threshold = self
++                        .config
++                        .efficient_threshold
++                        .unwrap_or(default_threshold());
++                    driver.set_evidence_if_empty(json!({"source":"decision_api","choice":answer.choice,
++                        "efficient_probability":answer.probabilities["efficient"],"efficient_threshold":threshold}));
++                    answer.choice == "efficient" && answer.probabilities["efficient"] >= threshold
++                } else {
++                    let choice = self.config.choices.get(&answer.choice);
++                    let accepted = choice.is_some_and(|choice| {
++                        answer.probabilities[&answer.choice] >= choice.min_probability
++                    });
++                    if accepted {
++                        selected_target = self.targets.get(&answer.choice).cloned();
++                    }
++                    driver.set_evidence_if_empty(json!({"source":"decision_api","choice":answer.choice,
++                        "probabilities":answer.probabilities,
++                        "min_probability":choice.map(|choice| choice.min_probability),
++                        "accepted":accepted,"selected_target":selected_target.as_ref().or_else(||driver.models_for(&Category::Capable).first())}));
++                    accepted
++                };
++                if efficient {
++                    Category::Efficient
++                } else {
++                    Category::Capable
++                }
++            }
++            Err(reason) => {
++                tracing::warn!(
++                    reason_code = reason,
++                    "Decision classifier unavailable; using capable default"
++                );
++                driver.set_evidence_if_empty(json!({"source":"fail_open","reason_code":reason}));
++                Category::Capable
++            }
++        };
++        let Some(target) =
++            selected_target.or_else(|| driver.models_for(&category).first().cloned())
++        else {
++            return Ok((Classification::Ambiguous(Vec::new()), None));
++        };
++        tracing::info!(
++            event = "decision_api_classified",
++            selected_target = %target,
++            elapsed_ms = started.elapsed().as_millis() as u64,
++        );
++        Ok((
++            Classification::Scores(vec![Score {
++                target,
++                confidence: 1.0,
++                category: Some(category),
++            }]),
++            None,
++        ))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use switchyard_protocol::{LlmRequest, Message};
++
++    fn config() -> DecisionClassifierConfig {
++        toml::from_str(
++            r#"
++base_url = "http://localhost:30000/v1"
++model = "Cloudflare/clef-flash"
++instructions = "Judge whole-task effort, preserving exact output constraints."
++efficient_criteria = "Narrow, clear routine tasks at GLM medium."
++capable_criteria = "Complex tasks at GLM xhigh."
++uncertain_criteria = "Missing or ambiguous context."
++"#,
++        )
++        .unwrap()
++    }
++
++    #[test]
++    fn decision_request_preserves_task_context_but_excludes_private_reasoning() {
++        let mut c = config();
++        c.recent_turn_window = 2;
++        let classifier = DecisionClassifier::new(c, &BTreeMap::new()).unwrap();
++        let request = Request {
++            llm_request: LlmRequest {
++                messages: vec![
++                    Message::text(Role::System, "required permissions"),
++                    Message::text(Role::User, "opening task"),
++                    Message::text(Role::Assistant, "old response outside window"),
++                    Message {
++                        role: Role::Assistant,
++                        content: vec![ContentBlock::Reasoning {
++                            text: "PRIVATE_REASONING".into(),
++                            signature: Some("PRIVATE_SIGNATURE".into()),
++                            details: vec![],
++                        }],
++                    },
++                    Message::text(Role::User, "latest update"),
++                ],
++                ..Default::default()
++            },
++            ..Default::default()
++        };
++        let body = String::from_utf8(classifier.payload(&request).unwrap()).unwrap();
++        assert!(body.contains("opening task"));
++        assert!(body.contains("latest update"));
++        assert!(body.contains("required permissions"));
++        assert!(!body.contains("old response outside window"));
++        assert!(!body.contains("PRIVATE_REASONING"));
++        assert!(!body.contains("PRIVATE_SIGNATURE"));
++        let payload: Value = serde_json::from_str(&body).unwrap();
++        assert!(
++            payload["questions"][QUESTION]["instructions"]
++                .as_str()
++                .unwrap()
++                .contains("exact output constraints")
++        );
++    }
++
++    #[test]
++    fn native_config_rejects_unsafe_or_invalid_settings() {
++        for url in [
++            "file:///etc/passwd",
++            "http://user:secret@localhost",
++            "http://localhost?token=secret",
++            "http://localhost/#fragment",
++            "relative",
++        ] {
++            let mut c = config();
++            c.base_url = url.into();
++            assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
++        }
++        for threshold in [f64::NAN, 0.5, -1.0, 1.1] {
++            let mut c = config();
++            c.efficient_threshold = Some(threshold);
++            assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
++        }
++        let mut c = config();
++        c.timeout_ms = 0;
++        assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
++        let mut c = config();
++        c.classify_trigger = ClassifyTrigger::EveryRequest;
++        assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
++        let mut c = config();
++        c.recent_turn_window = 65;
++        assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
++        let mut c = config();
++        c.api_key_env = Some("INVALID-ENV".into());
++        assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
++    }
++
++    #[test]
++    fn named_choices_require_valid_targets_and_reject_legacy_mixing() {
++        let mut c = config();
++        c.efficient_criteria.clear();
++        c.capable_criteria.clear();
++        c.choices = BTreeMap::from([
++            (
++                "routine".into(),
++                DecisionTargetConfig {
++                    target: "small".into(),
++                    criteria: "Routine tasks.".into(),
++                    min_probability: 0.9,
++                },
++            ),
++            (
++                "complex".into(),
++                DecisionTargetConfig {
++                    target: "large".into(),
++                    criteria: "Complex tasks.".into(),
++                    min_probability: 0.9,
++                },
++            ),
++        ]);
++        let targets = BTreeMap::from([
++            ("small".into(), ModelId::from("small-id")),
++            ("large".into(), ModelId::from("large-id")),
++        ]);
++        assert!(DecisionClassifier::new(c.clone(), &targets).is_ok());
++        assert!(DecisionClassifier::new(c.clone(), &BTreeMap::new()).is_err());
++        let mut mixed = c.clone();
++        mixed.efficient_threshold = Some(0.9);
++        assert!(DecisionClassifier::new(mixed, &targets).is_err());
++        let mut reserved = c.clone();
++        let choice = reserved.choices.remove("routine").unwrap();
++        reserved.choices.insert("uncertain".into(), choice);
++        assert!(DecisionClassifier::new(reserved, &targets).is_err());
++        for probability in [f64::NAN, -0.1, 1.1] {
++            let mut invalid = c.clone();
++            invalid.choices.get_mut("routine").unwrap().min_probability = probability;
++            assert!(DecisionClassifier::new(invalid, &targets).is_err());
++        }
++    }
++
++    #[test]
++    fn named_probability_validation_scales_with_the_choice_count() {
++        let probabilities: BTreeMap<String, f64> =
++            (0..18).map(|i| (i.to_string(), 0.0556)).collect();
++        let answer = ChoiceAnswer {
++            kind: "choice".into(),
++            choice: "0".into(),
++            confidence: 0.0,
++            probabilities,
++        };
++        assert!(validate_answer(&answer, answer.probabilities.keys().map(String::as_str)).is_ok());
++        assert!(validate_answer(&answer, ["other"].into_iter()).is_err());
++    }
++}
+diff --git a/crates/switchyard-runner/src/lib.rs b/crates/switchyard-runner/src/lib.rs
+index a488b31..a7a5b0b 100644
+--- a/crates/switchyard-runner/src/lib.rs
++++ b/crates/switchyard-runner/src/lib.rs
+@@ -5,6 +5,7 @@
+ 
+ mod algorithm;
+ mod config;
++mod decision_api;
+ mod failure;
+ mod provider_key_redactor;
+ mod route;
+@@ -12,8 +13,10 @@ mod runner;
+ 
+ pub use algorithm::{
+     AdvisorTriggerConfig, AlgorithmConfigError, AlgorithmSpec, CategoryModelConfig, ClassifierMode,
+-    ClassifierPolicyConfig, LlmClassifierRouteConfig, StageClassifierConfig, SubagentRouteConfig,
++    ClassifierPolicyConfig, CompositeClassifierConfig, LlmClassifierRouteConfig,
++    StageClassifierConfig, SubagentRouteConfig,
+ };
++pub use decision_api::DecisionClassifierConfig;
+ pub use failure::{RouteErrorKind, RouteErrorPhase, RouteErrorSummary, stream_error_summary};
+ // Re-exported because `Route::new` takes it, so a host wiring routes does not need a libsy dep.
+ pub use libsy::RuntimeModels;

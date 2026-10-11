@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: switchyard
-  tag: v0.2.0
+  tag: v0.3.0
   digest: ""
   pullPolicy: Always
 
@@ -120,7 +120,7 @@ livenessProbe:
 
 terminationGracePeriodSeconds: 40
 
-# The pinned v0.2.0 image is built for amd64 by default. Keep it off the ARM64
+# The pinned v0.3.0 image is built for amd64 by default. Keep it off the ARM64
 # daedalus-06 worker unless you explicitly publish a compatible image.
 nodeSelector:
   kubernetes.io/arch: amd64

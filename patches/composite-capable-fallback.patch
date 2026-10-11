@@ -1,0 +1,158 @@
+diff --git a/crates/libsy-llm-client/src/run.rs b/crates/libsy-llm-client/src/run.rs
+index 01e1c36..fd0a509 100644
+--- a/crates/libsy-llm-client/src/run.rs
++++ b/crates/libsy-llm-client/src/run.rs
+@@ -172,7 +172,8 @@ fn emit_routing_observations(
+ 
+ /// Serve one offloaded call and fulfill its promise.
+ ///
+-/// A client failure stops the driver before the algorithm can issue another call.
++/// Composite judges return failures to their classifier so its capable fallback
++/// can run. Other algorithms keep the existing transport-error policy.
+ async fn serve(
+     clients: ClientRouter,
+     call: CallModel,
+@@ -195,7 +196,13 @@ async fn serve(
+         call.models.len(),
+         true,
+     )
+-    .await?;
++    .await;
++    if call.algorithm == "composite" {
++        // Composite routing-time calls are capability forecasts, not answers.
++        // Aborting drive() here bypasses the judge's documented fail-open path.
++        return call.respond(response);
++    }
++    let response = response?;
+     call.respond(Ok(response))
+ }
+ 
+diff --git a/crates/libsy/src/algorithms/composite.rs b/crates/libsy/src/algorithms/composite.rs
+index 3afe614..bd86e8c 100644
+--- a/crates/libsy/src/algorithms/composite.rs
++++ b/crates/libsy/src/algorithms/composite.rs
+@@ -81,23 +81,45 @@ impl Processor<State> for TierSetter {
+         };
+         let identity = retention_key(request, self.message_hash_fallback);
+         if self.is_due(identity.as_ref(), request) {
+-            let (classification, _) = self.judge.score(state, request, driver).await?;
+-            if let Some(winner) = classification.argmax(false)?
+-                && let Some(tier) = Self::tier_for(winner.category)
+-            {
+-                set_fall_open(state, tier);
+-                if let Some(identity) = identity {
+-                    self.retain(identity, tier);
++            let classification = match self.judge.score(state, request, driver).await {
++                Ok((classification, _)) => Some(classification),
++                Err(_) => {
++                    // A routing forecast is optional. Preserve answer availability
++                    // when its dedicated client fails, without fabricating a verdict
++                    // or logging private provider response bodies.
++                    tracing::warn!(
++                        reason_code = "judge_unavailable",
++                        "Composite judge failed; using capable default"
++                    );
++                    driver.set_evidence_if_empty(serde_json::json!({
++                        "source": "fail_open", "reason_code": "judge_unavailable"
++                    }));
++                    None
+                 }
+-                return Ok(());
++            };
++            // We use the classifier face, bypassing its standalone capable
++            // fallback. Invalid/absent verdicts must not become efficient.
++            let tier = classification
++                .map(|classification| classification.argmax(false))
++                .transpose()?
++                .flatten()
++                .and_then(|winner| Self::tier_for(winner.category))
++                .unwrap_or(Tier::Capable);
++            set_fall_open(state, tier);
++            if let Some(identity) = identity {
++                self.retain(identity, tier);
+             }
++            return Ok(());
+         }
+-        // Either not this request's turn or the judge had no verdict, so the last
+-        // tier stands rather than dropping back to the picker default.
++        // A continuation uses the retained tier rather than the picker default.
+         if let Some(tier) = identity.and_then(|identity| self.tiers.lock().get(&identity).copied())
+         {
+             set_fall_open(state, tier);
+             driver.set_evidence_if_empty(serde_json::json!({"source": "retained"}));
++        } else {
++            // A continuation may arrive after restart/eviction or without an
++            // opening turn. Missing session state is not a medium verdict.
++            set_fall_open(state, Tier::Capable);
+         }
+         Ok(())
+     }
+@@ -247,6 +269,68 @@ mod tests {
+         ));
+     }
+ 
++    #[tokio::test]
++    async fn unusable_verdicts_retain_a_capable_fallback() -> Result<()> {
++        for verdict in [
++            "not json",
++            r#"{"bad":"verdict"}"#,
++            r#"{"crux":"bad","primary_rule":"SUP-1","capability_boundary":"unsupported","p_solve":0.99}"#,
++        ] {
++            let router = router()?;
++            let serve = move |target: ModelId, _request: Request| async move {
++                Ok(crate::core::testing::reply(
++                    if target == ModelId::from(JUDGE) {
++                        verdict.to_string()
++                    } else {
++                        target.to_string()
++                    },
++                ))
++            };
++            for request in [user_turn_request(), turn_request(false)] {
++                let (selected, _) =
++                    test_drive_with_models(router.clone(), request, runtime_models(), serve)
++                        .await?;
++                assert_eq!(selected, ModelId::from("strong"));
++            }
++        }
++        Ok(())
++    }
++
++    #[tokio::test]
++    async fn a_continuation_without_retained_state_defaults_capable() -> Result<()> {
++        let recorder = Arc::new(Recorder::default());
++        let (selected, _) = test_drive_with_models(
++            router()?,
++            turn_request(false),
++            runtime_models(),
++            recorder.serve(),
++        )
++        .await?;
++        assert_eq!(selected, ModelId::from("strong"));
++        assert_eq!(recorder.judge_calls(), 0);
++        Ok(())
++    }
++
++    #[tokio::test]
++    async fn a_failed_judge_defaults_capable_and_does_not_break_the_tool_loop() -> Result<()> {
++        let router = router()?;
++        let serve = |target: ModelId, _request: Request| async move {
++            if target == ModelId::from(JUDGE) {
++                Err(switchyard_protocol::LlmClientError::General(
++                    "judge fixture unavailable".into(),
++                ))
++            } else {
++                Ok(crate::core::testing::reply(target.to_string()))
++            }
++        };
++        for request in [user_turn_request(), turn_request(false)] {
++            let (selected, _) =
++                test_drive_with_models(router.clone(), request, runtime_models(), serve).await?;
++            assert_eq!(selected, ModelId::from("strong"));
++        }
++        Ok(())
++    }
++
+     /// A route may point its judge at the same target it serves capable turns on.
+     /// The tier then cannot be recovered by looking the served model up in the
+     /// runtime groups — one id, two categories — so it comes off the verdict itself.

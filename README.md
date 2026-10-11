@@ -1,12 +1,13 @@
 # Switchyard on Daedalus
 
-This repository builds NVIDIA-NeMo Switchyard v0.2.0 with a local target-model
-alias patch and deploys it as a non-root Helm workload in the `daedalus`
-namespace. The default Fireworks route exposes model `daedalus` on the OpenAI
-Chat Completions, OpenAI Responses, and Anthropic Messages endpoints.
+This repository builds NVIDIA-NeMo Switchyard v0.3.0 with local target-model
+alias, Fireworks reasoning, Composite fallback and native decision API patches.
+It deploys a non-root Helm workload in the `daedalus` namespace. The Fireworks configuration
+exposes model `daedalus` on the OpenAI Chat Completions, OpenAI Responses, and
+Anthropic Messages endpoints.
 
-`routes_fireworks.toml` uses the stage router with `capable_first` and exposes
-explicit effort routes for GLM 5.3 Fast. All Fireworks targets use the same
+`routes_fireworks.toml` implements Composite routing for automatic effort and
+exposes explicit effort routes for GLM 5.3 Fast. All Fireworks targets use the same
 provider model, `accounts/fireworks/routers/glm-5p3-fast`. Fireworks describes
 [Fast](https://docs.fireworks.ai/serverless/serverless-modes) as a faster serving
 mode of the same model. Switchyard chooses an effort target; Fireworks chooses
@@ -18,7 +19,7 @@ Dynamo model.
 ```mermaid
 flowchart LR
   A[Daedalus Rust agent] -->|Responses API| B[Switchyard]
-  B -->|daedalus: stage policy| C[high or low effort]
+  B -->|daedalus: judge + stage| C[xhigh or medium effort]
   B -->|deep / xhigh / max / other explicit route| D[fixed effort target]
   C --> E[Fireworks GLM 5.3 Fast: Chat Completions]
   D --> E
@@ -33,7 +34,7 @@ Chat Completions completed, so this upstream transport is intentional.
 
 | Requested model | Switchyard target | Requested Fireworks effort | Use |
 | --- | --- | --- | --- |
-| `daedalus` | Stage policy: normally `high`, sometimes `low` | `high` / `low` | Automatic/default profile |
+| `daedalus` | Native Composite choices: `low`, `medium`, `high`, `xhigh` | Selected target's effort | Automatic/default profile |
 | `daedalus/deep`, `daedalus/xhigh` | `xhigh` | `xhigh` | Deep profile; daily summaries and mapped skills |
 | `daedalus/max` | `max` | `max` | Explicit `deep_max` profile |
 | `daedalus/high` | `high` | `high` | Fixed high effort |
@@ -59,21 +60,24 @@ tools, approval authority, timeouts, or iteration budgets.
 
 ### What the stage router actually does
 
-The pinned Switchyard stage router reads coding-tool signals, not prompt
-complexity. It does not make an additional classifier-model call in this
-configuration. `capable_first` selects `high` when signals are absent or
-inconclusive. Critical errors or a recognized compaction marker force high.
-Passing tests plus recent recognized writes/edits and no recent error select
-low. Other decisions use a weighted error/production score, with threshold
-`0.5` and a window of three recent tool results/calls; the threshold is not a
-calibrated probability of task success.
+The v0.3.0 stage router reads tool results and agent progress. Its built-in
+vocabulary is calibrated for coding tools; it does not classify task complexity
+without a judge. Native Composite supplies the judge's selected task target when signals are inconclusive.
+Critical errors and repeated failures escalate. Error severity, spinning,
+exploration, and recent production contribute to a signed, `tanh`-scaled score;
+`confidence_threshold = 0.5` is a signal threshold, not a calibrated probability
+of task success. The recent window is three tool results. The new default
+`capable_hold_turns = 2` holds the capable tier after escalation; a clean test
+pass clears the hold early. A stable `x-switchyard-session-id` is needed to
+retain state across requests.
 
-Most Daedalus research/MCP tools do not match the coding write/edit patterns.
-The October 6 audit found all 850 default-route requests in the preceding
-24 hours selected high. Treat the default as quality-first, not as a semantic
-cheap-versus-hard classifier. Explicit effort routes bypass stage decisions.
-There is no configured provider failover, and Fireworks failures never silently
-send the request to the local model. Daedalus owns its bounded model retries.
+Most Daedalus research/MCP tools do not match the coding vocabulary. Before the
+October 11 upgrade, all 431 automatic-route requests in the current pod's
+18:43–20:26 UTC logs selected `xhigh`; that deployment used DeepSeek V4.1 Flash.
+These counts show target selection, not answer correctness or GLM latency.
+The upgraded deployment uses the local GLM 5.3 Fast configuration with
+`xhigh`/`medium`. Explicit effort routes bypass stage decisions. There is no
+configured provider failover; Daedalus owns its bounded model retries.
 
 An isolated October 6 comparison kept the deployed binary/model and changed
 only the picker to `efficient_first` and threshold to `0.3`. Twenty synthetic
@@ -84,7 +88,8 @@ for low-first. Exact answer/format assertions passed 28/40 and 29/40,
 respectively, but low-first failed six cases the baseline passed. Both arms
 had format failures, and the small sample does not establish general model
 quality. Low-first failed the frozen correctness and latency gates and was
-not promoted. The deployed default remains `capable_first` at `0.5`.
+not promoted. This historical comparison does not evaluate the new Composite
+`xhigh`/`medium` configuration.
 
 ### Conversation affinity and defaults
 
@@ -97,10 +102,12 @@ Switchyard preserves it through Responses-to-Chat translation.
 Fireworks supports [`user` for prompt-cache affinity](https://docs.fireworks.ai/guides/prompt-caching).
 Do not add one fixed `x-session-affinity`, `x-multi-turn-session-id`, or Dynamo
 session ID to `llm_clients.extra_headers`. A fixed key groups unrelated traffic
-onto one affinity destination. Clients that explicitly send per-session
-headers are still supported; Fireworks prioritizes
-[`x-multi-turn-session-id`](https://docs.fireworks.ai/guides/rollout-inference)
-over `x-session-affinity`. Affinity improves the opportunity for prefix reuse;
+onto one affinity destination. With server-owned provider credentials, v0.3.0
+forwards only the allowlisted
+`x-request-id` caller header. Inbound provider-affinity headers are not forwarded.
+Daedalus continues to use the translated `user` field for cache affinity;
+`x-switchyard-session-id` is separate gateway routing state. Affinity improves
+the opportunity for prefix reuse;
 cache hits still depend on exact prompt prefixes, replica placement, and load.
 
 Target defaults are illustrated below:
@@ -123,28 +130,227 @@ extra_body = { reasoning_effort = "low", reasoning_history = "interleaved" }
 the provider; omitting it preserves the original behavior where `id` serves
 both purposes. Distinct routing IDs keep each target's defaults independent,
 even when they share a client and provider model. Separate clients alone do
-not solve this for the stock v0.2.0 stage router, which also selects targets by
+not solve this for the stock v0.3.0 stage router, which also selects targets by
 ID. The Dockerfile applies `patches/target-model-aliases.patch` to the pinned
-source. **Rebuild the image before deploying this Fireworks configuration**;
-the unpatched image rejects the new `model` field.
+`336196f6fbfc97ddc71c1700f6092e564e9f23c2` source. The v0.3.0 patch covers the
+shared runner, provider transport, auxiliary operations, and decision metadata.
+`patches/fireworks-chat-reasoning.patch` also converts assistant-history plaintext
+`reasoning` to Fireworks-native `reasoning_content` for that provider. This keeps
+thinking attached to tool calls; generic `reasoning` is rejected by Fireworks.
+Other providers keep their existing representation. Conflicting or opaque
+reasoning fails explicitly rather than being silently dropped.
+**Rebuild the image before deploying this Fireworks configuration**; the unpatched
+image rejects the `model` field.
 
 Switchyard treats `extra_body` as a default-only, shallow top-level merge. An
 explicit reasoning effort in the inbound request wins after translation to
-`reasoning_effort`. The route advertises
-`reasoning = false` so clients using discovery do not automatically supply an
-effort that overrides the selected target.
+`reasoning_effort`. The Fireworks and OpenAI routes set `reasoning = true`:
+v0.3.0 actively rejects reasoning controls when this flag is false. `/v1/models` omits this flag, so this
+change does not inject caller effort through model discovery. Target defaults
+continue to allow an explicit caller effort to override the selected tier.
 
 The Fireworks targets use native Chat Completions fields. Do not add the
 Responses-only `truncation` field to their `extra_body`: Fireworks rejects it
 on Chat Completions. Switchyard translates the downstream Responses request
 before applying these target defaults.
 
+## Automatic reasoning routing
+
+`routes_fireworks.toml` uses Composite routing for `daedalus` with a native
+Cloudflare Clef-Flash decision classifier. It targets the service configured in
+`../decision-api`:
+
+```text
+http://decision-api.daedalus.svc.cluster.local:30000/v1/systemone
+model: Cloudflare/clef-flash
+```
+
+The classifier sends SystemOne `state` and one typed `choice` question named
+`effort`, with configurable named target choices and an `uncertain` option.
+The initial choices are `low`, `medium`, `high`, and `xhigh`; high uses the GLM
+Fast router and the others use GLM Flash, preserving the configured provider IDs.
+It uses the model's native joint head without a
+Chat endpoint, generated verdict, free-text `crux`, or artificial `p_solve`.
+A winning named choice must meet its own `min_probability` threshold, initially
+**0.90**, to set the task target. Uncertainty, insufficient probability and judge
+failures use `stage.capable_target`, currently xhigh. These criteria and thresholds
+are initial policies, not calibrated task-success rates.
+The stage router still applies tool evidence, critical-error escalation and
+recovery holds. Its existing confidence threshold remains 0.5.
+
+Each choice maps a label to a target and describes when that target is sufficient:
+
+```toml
+[routes.stage.classifier.choices.routine]
+target = "medium"
+min_probability = 0.90
+criteria = "Routine bounded synthesis or a short dependent tool sequence."
+```
+
+Replace or extend the choice tables to use more configurations or different models.
+Labels need not match target names. `uncertain` is reserved and uses
+`uncertain_criteria`; every target must exist in `[targets]`. Choose a capable
+target suitable for recovery across the entire choice pool. The initial automatic
+pool stops at xhigh; max and local remain explicit profiles. To add automatic max,
+add its choice and use max as the capable recovery target as well.
+
+The selected task target is retained through tool continuations. Healthy production
+signals return to that target, including xhigh, rather than dropping to the fixed
+`efficient_target`. Recovery signals escalate to the configured capable target;
+the two-turn hold then returns to the retained task target. Provider failures try
+the capable target only, without cycling through cheaper choices. In this mode,
+`stage.efficient_target` supplies the stage library's tier pair; it does not limit
+the judge to that target. The old `efficient_criteria`, `capable_criteria` and
+`efficient_threshold` schema remains supported for two-target routing, but cannot
+be mixed with named choices.
+
+Traces are not required to define these criteria. They are useful for collecting
+representative task inputs, tool sequences, recovery cases and outcomes. To tune
+the policy, replay safe cases against fixed target configurations and score task
+completion, tool names/arguments/order, output constraints, latency and token use.
+A trace from one target cannot show whether a cheaper target would also succeed.
+Freeze a held-out workload before tuning, and compare the routed candidate with
+the fixed capable baseline. Changing the choice pool changes the probability
+distribution, so recheck thresholds whenever choices or models change.
+
+The classifier runs on a request ending in a new user message, including steering
+or a runtime synthesis instruction. Daedalus sends `x-switchyard-session-id` as
+an opaque hash scoped to authenticated user and conversation (run ID when there
+is no conversation). Tool continuations reuse the verdict. The existing `user`
+field still supplies provider cache affinity; the gateway session header is not
+forwarded to Fireworks. Repeated user requests and retries may judge again.
+Session state is in memory and is lost on restart/eviction; unclassified tool
+continuations default to xhigh. Do not enable message-hash fallback, which can
+merge unrelated users with identical opening text.
+
+The native judge has a **2-second total deadline**, including body reads, with
+no retry or redirect. A refused connection, unavailable service, timeout, invalid
+answer/distribution, wrong model or exhausted context defaults to the capable
+tier. It verifies the exact question/options, a choice matching the highest
+probability, finite confidence metadata and normalized probabilities (allowing Clef's four-decimal rounding), and
+native usage with zero generated tokens. SystemOne confidence metadata can use
+a different normalization from option probabilities; policy reads the option
+probabilities directly. Failures are logged with bounded reason
+codes, never response bodies; timing is logged as `decision_api_classified`.
+
+The request preserves client instructions, the opening task, six recent messages
+and available tool names. Private reasoning is omitted. Unsupported media/opaque
+blocks or a request exceeding 12,000 serialized bytes default to xhigh without
+silently truncating the judge context. Answer requests retain the complete input.
+A reported input-token count at the configured 16,384 context ceiling also defaults
+capable because the service may have truncated state. Adjust that ceiling if you
+change the target service's context limit.
+
+Explicit profiles such as `daedalus/deep`, `/max`, `/medium`, `/low`, and `/local`
+bypass the judge. To enable service-owned bearer authentication, configure
+`api_key_env = "DECISION_API_KEY"` in the classifier and supply the matching key;
+`scripts/list_api_key_envs.py` includes it in deployment credential discovery.
+Caller credentials, routing/user header metadata and arbitrary headers are not
+forwarded to the decision service. The default service is configured without a bearer key.
+
+The Dockerfile applies `patches/decision-api-classifier.patch` after the existing
+patches. Rebuild before deploying this TOML. Existing LLM Composite classifiers
+remain supported with `type = "llm"` or no classifier `type`. They retain their
+original verdict schema and target settings. Native decision classifiers have
+no judge entry in `llm_clients` or `targets`.
+
+Exact native and Hue MCP tool names supply stage semantics:
+
+- `observe`: memory/time, search, scraping, retrieval, sources, skills and Hue reads.
+- `mutate`: memory writes and setting Hue light state.
+- `new`: briefing rendering, content distillation and Hue catalogue connection.
+
+Mixed-operation tools such as sandbox, documents, visual media and user interaction
+remain unclassified. No dedicated Daedalus tool is exclusively a planning tool;
+built-in plan semantics remain available. These labels affect stage scoring, not
+authorization. In particular, `mutate` favors the retained task target.
+
+The answering targets use the configured GLM Fast router or Flash model with
+different effort settings. The choice mapping can also select other configured
+models. Caller-supplied effort continues to
+override answering defaults. Native classifier probabilities express choice
+confidence and require broader workload calibration.
+A judge adds latency to each new user turn; semantic and compatibility checks do
+not establish a speedup or prove distinct internal provider compute tiers.
+
+Native integration validation covers the built parser, typed HTTP requests and
+responses, probability boundaries and rounding, session reuse/isolation, profile
+bypass, error/body deadlines, context guards and server-owned credentials. These
+contract tests do not establish Clef's routing accuracy. The companion Daedalus
+runtime session-header change in `../daedalus-agent` must be present to reuse
+classifications in the live tool loop. The current deployed Daedalus image passed
+its HTTP contract, including session-header propagation, on October 11.
+
+The named-choice implementation was deployed on October 11 with
+`make deploy-route_fireworks` at Switchyard Helm revision 99. Validation passed
+483 Rust tests, Clippy, 48 gateway checks against the release binary, and all
+nine live route probes. The deployed binary matches the tested binary; mounted
+TOML matches the local configuration except its trailing newline. Credentials
+were preserved. Live decision checks covered session reuse, explicit-profile
+bypass, critical tool results and unknown-session fallback.
+
+A paired gateway/provider evaluation passed 20/20 tasks and 8/8 synthetic tool
+sequences in each arm, using the routed candidate and a fixed xhigh baseline.
+The 0.90 policy kept all candidate cases on xhigh, so this verifies the current
+request path without establishing cheaper-target accuracy or savings. The first
+attempt used an invalid Fireworks combination of forced tools and JSON formatting;
+its results are retained alongside the corrected fixture evaluation. Evidence is
+in `/tmp/switchyard-multitarget-20261011/implementation-report.json`.
+
+The earlier two-target candidate consumed five real responses from your running Clef
+service through `/v1/decision`: simple and lookup cases were labeled efficient,
+proof and migration cases capable, and ambiguous context uncertain. The 0.90
+policy kept all five defaults at xhigh because efficient probabilities were below
+the threshold. These are judge-only contract checks, not calibrated accuracy or
+an answering-model benchmark. SGLang's normalized `confidence` differed from its
+option probability; both are accepted, and policy uses the option probability.
+
+Probe the exact configured routing question using
+only synthetic inputs. Override the base URL when using a port-forward:
+
+```bash
+kubectl -n daedalus port-forward service/decision-api 30090:30000
+python3 scripts/test_decision_judge.py routes_fireworks.toml \
+  --base-url http://127.0.0.1:30090/v1 --output /tmp/clef-routing-probe.json
+```
+
+The probe checks the native model/question/usage/distribution contract and
+reports choice scores and policy defaults. It does not execute the synthetic
+requested actions or certify answer quality. Follow with the frozen task/tool
+workload before promoting the Composite policy to production.
+
+The previous October 11 GLM-judge Composite implementation was built and tested
+but **not deployed**. Its historical evaluation is described below; it does not
+establish Clef routing accuracy or latency.
+At that earlier evaluation, the live releases were Switchyard revision 96 and
+Daedalus revision 52.
+Validation passed 478 upstream Rust tests, 28 gateway contract checks, Daedalus
+Rust/Clippy/hooks and its built-image HTTP contract. The final real Fireworks
+comparison covered 20 pairs and eight synthetic tool round trips per arm; both
+arms passed all eight tool cases. Exact-answer constraints passed 17/20 for the
+baseline and 16/20 for Composite, with three candidate regressions. Some medium
+answers emitted stray model delimiters or ignored the requested output format.
+The candidate recovered a real judge timeout by answering at xhigh.
+
+This small gateway-only sample had all-attempt p50/p95 of 0.94s/1.39s for the
+baseline and 1.80s/2.31s for Composite. It excludes real external tools, agent
+preparation and UI delivery, and does not establish general model quality.
+That GLM-judge candidate did not meet its frozen correctness gate and was not
+promoted. Historical local evidence is in
+`/tmp/switchyard-composite-20261011/implementation-report.json`.
+
+Upstream references: [v0.3.0 Composite routing](https://github.com/NVIDIA-NeMo/Switchyard/blob/v0.3.0/docs/routing_algorithms/composite_routing.md),
+[Stage Router](https://github.com/NVIDIA-NeMo/Switchyard/blob/v0.3.0/docs/routing_algorithms/stage_router_routing.md),
+[LLM classifier](https://github.com/NVIDIA-NeMo/Switchyard/blob/v0.3.0/docs/routing_algorithms/llm_classifier_routing.md),
+and [Fireworks structured outputs](https://docs.fireworks.ai/structured-responses/structured-response-formatting).
+
 ## Files
 
 - `routes_fireworks.toml`, `routes_openai.toml`, and `routes_local.toml` are the
   selectable deployment sources for clients, targets, and routes.
 - `charts/switchyard/` contains the Helm chart.
-- `Dockerfile` builds the pinned upstream v0.2.0 commit with the target-model alias patch.
+- `Dockerfile` builds the pinned upstream v0.3.0 commit with the target-model alias
+  Fireworks reasoning, Composite fallback and native decision API patches.
 - `scripts/deploy.sh` reconciles the API-key Secret, forces a fresh pod rollout,
   deploys Helm, and checks rollout, EndpointSlice, and HTTP health.
 
@@ -166,8 +372,8 @@ so the selected routes file can be changed freely while experimenting.
 
 The transport tests use a built binary and a local mock to check both stage
 defaults, critical-error escalation, every Fireworks route, buffered/streaming
-Responses, tool history, caller effort overrides, open argument schemas, and
-conversation affinity. Configuration invariants and the route smoke harness
+Responses, tool history, caller effort overrides, open argument schemas,
+conversation affinity, and provider-header filtering. Configuration invariants and the route smoke harness
 also run. The mocks do not contact Fireworks:
 
 ```bash
@@ -221,7 +427,7 @@ python3 -m unittest discover -s tests -p 'test_route_smoke.py' -v
 
 ## Build, publish, and deploy
 
-No official v0.2.0 container is assumed. Build the pinned upstream commit and
+No official v0.3.0 container is assumed. Build the pinned upstream commit and
 push it to a registry every Kubernetes node can pull from. Each route target
 runs the complete image build, push, and guarded deployment sequence:
 
@@ -242,7 +448,7 @@ make deploy ROUTES_FILE=routes_local.toml
 ```
 
 The defaults are image repository
-`daedalus.ddns.me:5050/btuttle/switchyard`, tag `v0.2.0`, and Kubernetes context
+`daedalus.ddns.me:5050/btuttle/switchyard`, tag `v0.3.0`, and Kubernetes context
 `kubernetes-admin@kubernetes`; each can still be overridden as a Make variable.
 
 Copy `.env.example` to `.env` and set every credential named by an
