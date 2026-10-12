@@ -1,7 +1,17 @@
 # Switchyard on Daedalus
 
 This repository builds NVIDIA-NeMo Switchyard v0.3.0 with local target-model
-alias, Fireworks reasoning, Composite fallback and native decision API patches.
+alias, Fireworks reasoning, Composite fallback, native decision API and
+structural credential redaction patches.
+
+Credential redaction walks decoded JSON strings before serializing responses.
+Replacing credentials in serialized JSON could match across an escape boundary
+and produce an invalid stream event, aborting long Daedalus briefings. The
+`structural-credential-redaction.patch` also walks JSON encoded inside tool
+arguments and preserves their spelling when no credential changed. The build
+runs redactor regressions; the HTTP fixture covers large reasoning events,
+valid nested arguments, continued credential removal and unchanged upstream auth.
+
 It deploys a non-root Helm workload in the `daedalus` namespace. The Fireworks configuration
 exposes model `daedalus` on the OpenAI Chat Completions, OpenAI Responses, and
 Anthropic Messages endpoints.

@@ -39,6 +39,7 @@ class FireworksChatTransportTest(unittest.TestCase):
         decision_auth=False,
         decision_suffix="/v1",
         source_transform=None,
+        redaction_key="test",
     ):
         captured = Queue()
 
@@ -76,6 +77,30 @@ class FireworksChatTransportTest(unittest.TestCase):
                         },
                     },
                 ]
+                if "REDACTION_BOUNDARY" in json.dumps(body):
+                    events[0]["choices"][0]["delta"].update(
+                        {
+                            "reasoning_content": "A complete line\nabc follows it. "
+                            * 2000,
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_redaction",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "render",
+                                        "arguments": json.dumps(
+                                            {
+                                                "text": "A line\nabc follows it.",
+                                                "credential": "nabc",
+                                            }
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                    events[1]["choices"][0]["finish_reason"] = "tool_calls"
                 if self.path.endswith("/systemone"):
                     time.sleep(judge_delay)
                     result = (
@@ -289,8 +314,8 @@ class FireworksChatTransportTest(unittest.TestCase):
                     port = sock.getsockname()[1]
                 env = {
                     **os.environ,
-                    "FIREWORKS_API_KEY": "test",
-                    "LOCAL_API_KEY": "test",
+                    "FIREWORKS_API_KEY": redaction_key,
+                    "LOCAL_API_KEY": redaction_key,
                     "NATIVE_DECISION_TEST_KEY": "native-decision-secret",
                 }
                 process = subprocess.Popen(
@@ -430,6 +455,58 @@ class FireworksChatTransportTest(unittest.TestCase):
             self.assertEqual(body["tools"][0]["function"]["parameters"], parameters)
             self.assertEqual(body["tool_choice"], "none")
             self.assertTrue(body["parallel_tool_calls"])
+
+    def test_credential_redaction_preserves_large_reasoning_and_tool_arguments(self):
+        with self.router(redaction_key="nabc") as (url, captured, _config):
+            request = Request(
+                url + "/v1/responses",
+                data=json.dumps(
+                    {
+                        "model": "daedalus/high",
+                        "input": "REDACTION_BOUNDARY",
+                        "stream": True,
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "render",
+                                "parameters": {"type": "object"},
+                            }
+                        ],
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(request, timeout=5) as response:
+                events = [
+                    json.loads(line[6:])
+                    for line in response.read().decode().splitlines()
+                    if line.startswith("data: {")
+                ]
+            reasoning = next(
+                event
+                for event in events
+                if event.get("type") == "response.reasoning_summary_text.done"
+            )
+            self.assertEqual(
+                reasoning["text"], "A complete line\nabc follows it. " * 2000
+            )
+            arguments = next(
+                event
+                for event in events
+                if event.get("type") == "response.function_call_arguments.done"
+            )
+            self.assertEqual(
+                json.loads(arguments["arguments"]),
+                {"text": "A line\nabc follows it.", "credential": "[REDACTED]"},
+            )
+            self.assertTrue(
+                any(event.get("type") == "response.completed" for event in events)
+            )
+            _path, _body, headers = captured.get(timeout=5)
+            self.assertEqual(
+                {key.lower(): value for key, value in headers.items()}["authorization"],
+                "Bearer nabc",
+            )
 
     def test_conversation_affinity_survives_translation_without_static_headers(self):
         with self.router() as (url, captured, _config):

@@ -24,6 +24,12 @@ RUN git apply --check /tmp/target-model-aliases.patch \
     && git apply /tmp/decision-api-classifier.patch \
     && cargo build --locked --release -p switchyard-server
 
+COPY patches/structural-credential-redaction.patch /tmp/
+RUN git apply --check /tmp/structural-credential-redaction.patch \
+    && git apply /tmp/structural-credential-redaction.patch \
+    && cargo test --locked --release -p switchyard-runner provider_key_redactor --lib \
+    && cargo build --locked --release -p switchyard-server
+
 FROM debian:bookworm-slim
 
 ARG SWITCHYARD_COMMIT=336196f6fbfc97ddc71c1700f6092e564e9f23c2
@@ -33,7 +39,7 @@ LABEL org.opencontainers.image.title="NVIDIA-NeMo Switchyard server" \
       org.opencontainers.image.source="https://github.com/NVIDIA-NeMo/Switchyard" \
       org.opencontainers.image.version="0.3.0" \
       org.opencontainers.image.revision="${SWITCHYARD_COMMIT}" \
-      me.daedalus.switchyard.patches="target-model-aliases-v2,fireworks-chat-reasoning-v1,composite-capable-fallback-v1,decision-api-classifier-v2" \
+      me.daedalus.switchyard.patches="target-model-aliases-v2,fireworks-chat-reasoning-v1,composite-capable-fallback-v1,decision-api-classifier-v2,structural-credential-redaction-v1" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \
