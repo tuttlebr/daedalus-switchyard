@@ -232,6 +232,8 @@ class FireworksChatTransportTest(unittest.TestCase):
                     # Keep legacy stage assertions tied to their original medium/xhigh pair.
                     source = source.replace(
                         'efficient_target = "high"', 'efficient_target = "medium"'
+                    ).replace(
+                        'capable_target = "max"', 'capable_target = "xhigh"'
                     )
                 if source_transform:
                     source = source_transform(source)
@@ -299,9 +301,10 @@ class FireworksChatTransportTest(unittest.TestCase):
                     )
                 if forced_effort:
                     for effort in ("max", "xhigh", "high", "medium", "low"):
+                        history = config["targets"][effort]["extra_body"]["reasoning_history"]
                         source = source.replace(
-                            f'extra_body = {{ reasoning_effort = "{effort}", reasoning_history = "interleaved" }}',
-                            f'reasoning_effort = "{effort}"\nextra_body = {{ reasoning_history = "interleaved" }}',
+                            f'extra_body = {{ reasoning_effort = "{effort}", reasoning_history = "{history}" }}',
+                            f'reasoning_effort = "{effort}"\nextra_body = {{ reasoning_history = "{history}" }}',
                         )
                 provider_url = config["llm_clients"]["fireworks"]["base_url"]
                 source = source.replace(
@@ -637,7 +640,10 @@ class FireworksChatTransportTest(unittest.TestCase):
             target = config["routes"]["stage"]["capable_target"]
             self.assertEqual(headers["x-model-router-selected-model"], target)
             self.assertEqual(body["reasoning_effort"], target)
-            self.assertEqual(body["reasoning_history"], "interleaved")
+            self.assertEqual(
+                body["reasoning_history"],
+                config["targets"][target]["extra_body"]["reasoning_history"],
+            )
 
     def test_decision_resolves_provider_model_without_calling_it(self):
         with self.router() as (url, captured, config):
@@ -1146,16 +1152,19 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(request["model"], expected["model"])
 
     def test_none_alias_keeps_low_effort_and_in_turn_history(self):
-        with self.router() as (url, captured, _config):
+        with self.router() as (url, captured, config):
             headers = self.request(url, model="daedalus/none")
             _, body, _ = captured.get(timeout=5)
             self.assertEqual(headers["x-model-router-selected-model"], "low")
             self.assertEqual(body["reasoning_effort"], "low")
-            self.assertEqual(body["reasoning_history"], "interleaved")
+            self.assertEqual(
+                body["reasoning_history"],
+                config["targets"]["low"]["extra_body"]["reasoning_history"],
+            )
 
     @staticmethod
     def target_verdict(choice, probability=0.96):
-        options = ("low", "medium", "high", "xhigh", "uncertain")
+        options = ("low", "high", "xhigh", "max", "uncertain")
         probabilities = {name: (1 - probability) / 4 for name in options}
         probabilities[choice] = probability
         return {
@@ -1172,7 +1181,7 @@ class FireworksChatTransportTest(unittest.TestCase):
         }
 
     def test_named_choices_select_four_targets_and_retain_them(self):
-        for target in ("low", "medium", "high", "xhigh"):
+        for target in ("low", "high", "xhigh", "max"):
             with (
                 self.subTest(target=target),
                 self.router(
@@ -1185,7 +1194,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                 _, judge, _ = captured.get(timeout=5)
                 self.assertEqual(
                     set(judge["questions"]["effort"]["criteria"]),
-                    {"low", "medium", "high", "xhigh", "uncertain"},
+                    {"low", "high", "xhigh", "max", "uncertain"},
                 )
                 _, body, _ = captured.get(timeout=5)
                 self.assertEqual(body["model"], config["targets"][target]["model"])
@@ -1198,7 +1207,8 @@ class FireworksChatTransportTest(unittest.TestCase):
     def test_named_choice_probability_gate_and_uncertainty_use_capable(self):
         for choice, probability in (
             ("low", 0.89),
-            ("medium", 0.89),
+            ("high", 0.89),
+            ("xhigh", 0.54),
             ("uncertain", 0.96),
         ):
             with (
@@ -1210,11 +1220,11 @@ class FireworksChatTransportTest(unittest.TestCase):
             ):
                 session = {"x-switchyard-session-id": "named-uncertainty"}
                 headers = self.request(url, headers=session)
-                self.assertEqual(headers["x-model-router-selected-model"], "xhigh")
+                self.assertEqual(headers["x-model-router-selected-model"], "max")
                 captured.get(timeout=5)
                 captured.get(timeout=5)
                 headers = self.request(url, headers=session, input=self.continuation())
-                self.assertEqual(headers["x-model-router-selected-model"], "xhigh")
+                self.assertEqual(headers["x-model-router-selected-model"], "max")
                 captured.get(timeout=5)
                 self.assertTrue(captured.empty())
 
@@ -1224,13 +1234,15 @@ class FireworksChatTransportTest(unittest.TestCase):
                 'target = "low"\nmin_probability = 0.90',
                 'target = "low"\nmin_probability = 0.80',
             ).replace(
-                'target = "medium"\nmin_probability = 0.90',
-                'target = "medium"\nmin_probability = 0.95',
+                'target = "high"\nmin_probability = 0.90',
+                'target = "high"\nmin_probability = 0.95',
             )
 
         for choice, probability, expected in (
             ("low", 0.85, "low"),
-            ("medium", 0.93, "xhigh"),
+            ("high", 0.93, "max"),
+            ("xhigh", 0.55, "xhigh"),
+            ("max", 0.30, "max"),
         ):
             with (
                 self.subTest(choice=choice),
@@ -1256,9 +1268,9 @@ class FireworksChatTransportTest(unittest.TestCase):
             headers = self.request(
                 url, headers=session, input=self.continuation(output="out of memory")
             )
-            self.assertEqual(headers["x-model-router-selected-model"], "xhigh")
+            self.assertEqual(headers["x-model-router-selected-model"], "max")
             captured.get(timeout=5)
-            for expected in ("xhigh", "xhigh", "low"):
+            for expected in ("max", "max", "low"):
                 headers = self.request(url, headers=session, input=self.continuation())
                 self.assertEqual(headers["x-model-router-selected-model"], expected)
                 captured.get(timeout=5)
@@ -1301,7 +1313,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                 ),
             ):
                 headers = self.request(url)
-                self.assertEqual(headers["x-model-router-selected-model"], "xhigh")
+                self.assertEqual(headers["x-model-router-selected-model"], "max")
                 captured.get(timeout=5)
                 captured.get(timeout=5)
 
@@ -1313,7 +1325,7 @@ class FireworksChatTransportTest(unittest.TestCase):
         ):
             session = {"x-switchyard-session-id": "named-unavailable"}
             headers = self.request(url, headers=session)
-            self.assertEqual(headers["x-model-router-selected-model"], "xhigh")
+            self.assertEqual(headers["x-model-router-selected-model"], "max")
             captured.get(timeout=5)
             captured.get(timeout=5)
             headers = self.request(
@@ -1321,7 +1333,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                 headers={"x-switchyard-session-id": "other-user"},
                 input=self.continuation(),
             )
-            self.assertEqual(headers["x-model-router-selected-model"], "xhigh")
+            self.assertEqual(headers["x-model-router-selected-model"], "max")
             captured.get(timeout=5)
             self.assertTrue(captured.empty())
 
@@ -1336,7 +1348,7 @@ class FireworksChatTransportTest(unittest.TestCase):
         probe = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(probe)
         with self.router(
-            composite="native_targets", verdict=self.target_verdict("medium")
+            composite="native_targets", verdict=self.target_verdict("high")
         ) as (url, captured, config):
             self.request(url)
             _, expected, native_headers = captured.get(timeout=5)
@@ -1350,12 +1362,12 @@ class FireworksChatTransportTest(unittest.TestCase):
                     route["stage"]["capable_target"],
                 )
             for row in results:
-                self.assertEqual(row["selected_target"], "medium")
+                self.assertEqual(row["selected_target"], "high")
                 _, request, _ = captured.get(timeout=5)
                 self.assertEqual(request["questions"], expected["questions"])
 
     def test_named_decisions_only_fall_back_to_capable_and_rejudge_user_turns(self):
-        for target in ("low", "xhigh"):
+        for target in ("low", "xhigh", "max"):
             with (
                 self.subTest(target=target),
                 self.router(
@@ -1384,7 +1396,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(result["selected"]["target"], target)
                 self.assertEqual(
                     [row["target"] for row in result["fallbacks"]],
-                    ["xhigh"] if target != "xhigh" else [],
+                    ["max"] if target != "max" else [],
                 )
                 captured.get(timeout=5)
                 result = decide(self.continuation(name="add_memory"))

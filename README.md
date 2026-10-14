@@ -17,21 +17,20 @@ exposes model `daedalus` on the OpenAI Chat Completions, OpenAI Responses, and
 Anthropic Messages endpoints.
 
 `routes_fireworks.toml` implements Composite routing for automatic effort and
-exposes explicit effort routes for GLM 5.3 Fast. All Fireworks targets use the same
-provider model, `accounts/fireworks/routers/glm-5p3-fast`. Fireworks describes
-[Fast](https://docs.fireworks.ai/serverless/serverless-modes) as a faster serving
-mode of the same model. Switchyard chooses an effort target; Fireworks chooses
-the inference replica. The `/local` route is a separate, explicitly requested
-Dynamo model.
+exposes explicit effort routes. All Fireworks effort targets use the configured
+provider model; the routing policy describes task requirements independently of
+that model's name. `routes_coreweave.toml` uses the same automatic routing policy
+with its own provider settings. The `/local` route is a separate, explicitly
+requested Dynamo model.
 
 ## Daedalus request path
 
 ```mermaid
 flowchart LR
   A[Daedalus Rust agent] -->|Responses API| B[Switchyard]
-  B -->|daedalus: judge + stage| C[xhigh or medium effort]
+  B -->|daedalus: judge + stage| C[low, high, xhigh or max effort]
   B -->|deep / xhigh / max / other explicit route| D[fixed effort target]
-  C --> E[Fireworks GLM 5.3 Fast: Chat Completions]
+  C --> E[Fireworks: Chat Completions]
   D --> E
   B -->|daedalus/local| F[Local Dynamo: Responses API]
 ```
@@ -44,7 +43,7 @@ Chat Completions completed, so this upstream transport is intentional.
 
 | Requested model | Switchyard target | Requested Fireworks effort | Use |
 | --- | --- | --- | --- |
-| `daedalus` | Native Composite choices: `low`, `medium`, `high`, `xhigh` | Selected target's effort | Automatic/default profile |
+| `daedalus` | Native Composite choices: `low`, `high`, `xhigh`, `max` | Selected target's effort | Automatic/default profile |
 | `daedalus/deep`, `daedalus/xhigh` | `xhigh` | `xhigh` | Deep profile; daily summaries and mapped skills |
 | `daedalus/max` | `max` | `max` | Explicit `deep_max` profile |
 | `daedalus/high` | `high` | `high` | Fixed high effort |
@@ -177,14 +176,18 @@ model: Cloudflare/clef-flash
 
 The classifier sends SystemOne `state` and one typed `choice` question named
 `effort`, with configurable named target choices and an `uncertain` option.
-The initial choices are `low`, `medium`, `high`, and `xhigh`; high uses the GLM
-Fast router and the others use GLM Flash, preserving the configured provider IDs.
+Both Fireworks and CoreWeave use the choices `low`, `high`, `xhigh`, and `max`.
 It uses the model's native joint head without a
 Chat endpoint, generated verdict, free-text `crux`, or artificial `p_solve`.
-A winning named choice must meet its own `min_probability` threshold, initially
-**0.90**, to set the task target. Uncertainty, insufficient probability and judge
-failures use `stage.capable_target`, currently xhigh. These criteria and thresholds
-are initial policies, not calibrated task-success rates.
+A winning named choice must meet its own `min_probability` threshold to set the
+task target: **0.90** for low and high, **0.55** for xhigh, and **0.00** for max.
+Max needs no acceptance gate because it is also the fallback. Uncertainty,
+insufficient probability and judge failures use `stage.capable_target`, currently
+max. Daily summaries, substantive code work and complete well-formatted HTML pages
+require at least xhigh; exceptional complexity, difficult recovery and consequential
+decisions require max. The policy applies to the entire deliverable, including
+final synthesis, rendering and validation. These criteria and thresholds are
+starting policies, not calibrated task-success rates.
 The stage router still applies tool evidence, critical-error escalation and
 recovery holds. Its existing confidence threshold remains 0.5.
 
@@ -200,9 +203,9 @@ criteria = "Routine bounded synthesis or a short dependent tool sequence."
 Replace or extend the choice tables to use more configurations or different models.
 Labels need not match target names. `uncertain` is reserved and uses
 `uncertain_criteria`; every target must exist in `[targets]`. Choose a capable
-target suitable for recovery across the entire choice pool. The initial automatic
-pool stops at xhigh; max and local remain explicit profiles. To add automatic max,
-add its choice and use max as the capable recovery target as well.
+target suitable for recovery across the entire choice pool. The automatic pool
+includes max; local remains explicit. Fireworks also retains an explicit medium
+target and route. CoreWeave's medium route aliases high.
 
 The selected task target is retained through tool continuations. Healthy production
 signals return to that target, including xhigh, rather than dropping to the fixed
@@ -230,7 +233,7 @@ is no conversation). Tool continuations reuse the verdict. The existing `user`
 field still supplies provider cache affinity; the gateway session header is not
 forwarded to Fireworks. Repeated user requests and retries may judge again.
 Session state is in memory and is lost on restart/eviction; unclassified tool
-continuations default to xhigh. Do not enable message-hash fallback, which can
+continuations default to max. Do not enable message-hash fallback, which can
 merge unrelated users with identical opening text.
 
 The native judge has a **2-second total deadline**, including body reads, with
@@ -245,7 +248,7 @@ codes, never response bodies; timing is logged as `decision_api_classified`.
 
 The request preserves client instructions, the opening task, six recent messages
 and available tool names. Private reasoning is omitted. Unsupported media/opaque
-blocks or a request exceeding 12,000 serialized bytes default to xhigh without
+blocks or a request exceeding 65,536 serialized bytes default to max without
 silently truncating the judge context. Answer requests retain the complete input.
 A reported input-token count at the configured 16,384 context ceiling also defaults
 capable because the service may have truncated state. Adjust that ceiling if you
@@ -275,8 +278,8 @@ remain unclassified. No dedicated Daedalus tool is exclusively a planning tool;
 built-in plan semantics remain available. These labels affect stage scoring, not
 authorization. In particular, `mutate` favors the retained task target.
 
-The answering targets use the configured GLM Fast router or Flash model with
-different effort settings. The choice mapping can also select other configured
+The answering targets use the configured provider model with different effort
+settings. The choice mapping can also select other configured
 models. Caller-supplied effort continues to
 override answering defaults. Native classifier probabilities express choice
 confidence and require broader workload calibration.
@@ -356,7 +359,7 @@ and [Fireworks structured outputs](https://docs.fireworks.ai/structured-response
 
 ## Files
 
-- `routes_fireworks.toml`, `routes_openai.toml`, and `routes_local.toml` are the
+- `routes_coreweave.toml`, `routes_fireworks.toml`, `routes_openai.toml`, and `routes_local.toml` are the
   selectable deployment sources for clients, targets, and routes.
 - `charts/switchyard/` contains the Helm chart.
 - `Dockerfile` builds the pinned upstream v0.3.0 commit with the target-model alias
