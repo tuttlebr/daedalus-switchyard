@@ -28,6 +28,14 @@ if [[ ! -f "${ROUTES_FILE}" ]]; then
   exit 66
 fi
 
+# Validate, probe and deploy exactly one immutable local snapshot, even if the
+# operator edits the source TOML while the capability requests are running.
+gate_snapshot_dir="$(mktemp -d)"
+readonly gate_snapshot_dir
+trap 'rm -f -- "${gate_snapshot_dir}/routes.toml" "${gate_snapshot_dir}/api-keys.env"; rmdir -- "${gate_snapshot_dir}"' EXIT
+cp -- "${ROUTES_FILE}" "${gate_snapshot_dir}/routes.toml"
+ROUTES_FILE="${gate_snapshot_dir}/routes.toml"
+
 mapfile -t api_key_env_names < <(
   python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" "${ROUTES_FILE}"
 )
@@ -56,6 +64,7 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
   source "${PROJECT_DIR}/.env"
   set +a
 fi
+ROUTES_FILE="${gate_snapshot_dir}/routes.toml"
 
 for api_key_env_name in "${api_key_env_names[@]}"; do
   if [[ -n "${caller_api_key_was_set[${api_key_env_name}]-}" ]]; then
@@ -118,11 +127,17 @@ helm lint "${CHART_DIR}" "${helm_validation_args[@]}"
 helm template "${RELEASE_NAME}" "${CHART_DIR}" \
   --namespace "${NAMESPACE}" "${helm_validation_args[@]}" >/dev/null
 
+# A listed model and a healthy pod do not prove generation or tool support.
+# Run before any namespace/Secret/release mutation; a failure leaves live routes intact.
+python3 "${PROJECT_DIR}/scripts/check_capabilities.py" "${ROUTES_FILE}" \
+  --timeout "${CAPABILITY_TIMEOUT:-60}" \
+  --max-output-tokens "${CAPABILITY_MAX_OUTPUT_TOKENS:-4096}"
+
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 if ((${#api_key_env_names[@]} > 0)); then
-  api_key_env_file="$(mktemp)"
+  api_key_env_file="${gate_snapshot_dir}/api-keys.env"
+  touch "${api_key_env_file}"
   chmod 600 "${api_key_env_file}"
-  trap 'rm -f -- "${api_key_env_file}"' EXIT
   for api_key_env_name in "${api_key_env_names[@]}"; do
     printf '%s=%s\n' "${api_key_env_name}" "${!api_key_env_name}" \
       >>"${api_key_env_file}"
@@ -131,7 +146,6 @@ if ((${#api_key_env_names[@]} > 0)); then
     --from-env-file="${api_key_env_file}" \
     --dry-run=client -o yaml | kubectl apply -f -
   rm -f -- "${api_key_env_file}"
-  trap - EXIT
 fi
 
 helm_args=(
