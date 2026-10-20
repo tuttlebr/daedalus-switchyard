@@ -9,6 +9,12 @@ Each target must stream a completed text response, select a synthetic tool both
 automatically and explicitly, and consume a fresh unpredictable value returned
 by that tool. The gate checks arguments and call IDs. The tool is implemented
 inside the checker and has no external effects.
+The Chat stream parser accepts nullable `tool_calls` and an empty chunk repeating
+the same finish reason, as emitted by Mercury 3. A successful `stop` with tool-call
+data is treated as `tool_calls`; IDs, arguments and result consumption still have
+to pass. The parser requires `[DONE]` and rejects unsuccessful or conflicting
+finish reasons, additional content/tool calls after completion, and malformed
+tool-call collections.
 `CAPABILITY_TIMEOUT` and `CAPABILITY_MAX_OUTPUT_TOKENS` set deployment probe
 budgets; defaults are 60 seconds per request and 4096 output tokens.
 

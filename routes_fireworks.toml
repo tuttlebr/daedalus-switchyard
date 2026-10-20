@@ -7,31 +7,31 @@ api_key_env = "FIREWORKS_API_KEY"
 
 [targets.max]
 id = "max"
-model = "accounts/fireworks/models/glm-5p3"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "max", reasoning_history = "disabled" }
 
 [targets.xhigh]
 id = "xhigh"
-model = "accounts/fireworks/models/glm-5p3"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "xhigh", reasoning_history = "disabled" }
 
 [targets.high]
 id = "high"
-model = "accounts/fireworks/models/glm-5p3"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "high", reasoning_history = "disabled" }
 
 [targets.medium]
 id = "medium"
-model = "accounts/fireworks/models/glm-5p3"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "medium", reasoning_history = "disabled" }
 
 [targets.low]
 id = "low"
-model = "accounts/fireworks/models/glm-5p3"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "low", reasoning_history = "disabled" }
 
@@ -43,7 +43,7 @@ api_key_env = "LOCAL_API_KEY"
 
 [targets.local]
 id = "local"
-model = "nvidia/Muse-Glimmer-30B-NVFP4"
+model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 llm_client = "local"
 # ------------------------------------------------------------------------------
 [routes.stage]

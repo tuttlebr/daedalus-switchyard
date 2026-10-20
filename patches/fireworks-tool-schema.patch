@@ -1,0 +1,267 @@
+diff --git a/crates/libsy-llm-client/src/client.rs b/crates/libsy-llm-client/src/client.rs
+--- a/crates/libsy-llm-client/src/client.rs
++++ b/crates/libsy-llm-client/src/client.rs
+@@ -287,6 +287,7 @@
+         }
+         if matches!(backend, Backend::OpenAiChat(_)) {
+             normalize_fireworks_chat_reasoning(&mut body, backend)?;
++            normalize_fireworks_chat_tool_schemas(&mut body, backend);
+             ensure_openai_stream_usage(&mut body);
+         }
+         let streaming = endpoint.allows_streaming()
+@@ -931,7 +932,7 @@
+ // Fireworks accepts historical thinking as `reasoning_content`, while the generic
+ // Chat encoder emits `reasoning`. Preserve the text on tool continuations without
+ // changing other providers' representations or discarding opaque reasoning.
+-fn normalize_fireworks_chat_reasoning(body: &mut Value, backend: &Backend) -> Result<()> {
++fn is_fireworks_chat(body: &Value, backend: &Backend) -> bool {
+     let fireworks_model = body
+         .get("model")
+         .and_then(Value::as_str)
+@@ -939,7 +940,11 @@
+     let fireworks_host = reqwest::Url::parse(&backend.url())
+         .ok()
+         .is_some_and(|url| url.host_str() == Some("api.fireworks.ai"));
+-    if !fireworks_model && !fireworks_host {
++    fireworks_model || fireworks_host
++}
++
++fn normalize_fireworks_chat_reasoning(body: &mut Value, backend: &Backend) -> Result<()> {
++    if !is_fireworks_chat(body, backend) {
+         return Ok(());
+     }
+     let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+@@ -981,6 +986,107 @@
+         message.insert("reasoning_content".to_string(), reasoning);
+     }
+     Ok(())
++}
++
++fn normalize_fireworks_chat_tool_schemas(body: &mut Value, backend: &Backend) {
++    if !is_fireworks_chat(body, backend) {
++        return;
++    }
++    if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
++        for tool in tools {
++            if let Some(schema) = tool.pointer_mut("/function/parameters") {
++                normalize_fireworks_schema(schema);
++            }
++        }
++    }
++    if let Some(functions) = body.get_mut("functions").and_then(Value::as_array_mut) {
++        for function in functions {
++            if let Some(schema) = function.get_mut("parameters") {
++                normalize_fireworks_schema(schema);
++            }
++        }
++    }
++}
++
++fn normalize_fireworks_schema(schema: &mut Value) {
++    let Some(object) = schema.as_object_mut() else {
++        return;
++    };
++    // Fireworks needs an explicit type for presence and required-only schemas.
++    // `required` constrains objects but also accepts every non-object value.
++    // Keep that behavior inside anyOf, oneOf, and not by using all JSON types,
++    // excluding null only when an existing constraint already excludes it.
++    if !object.contains_key("type") {
++        if object.get("not") == Some(&json!({"type": "null"})) {
++            object.insert(
++                "type".to_string(),
++                json!(["string", "number", "boolean", "object", "array"]),
++            );
++        } else if object.contains_key("required")
++            && ![
++                "properties",
++                "$ref",
++                "enum",
++                "const",
++                "allOf",
++                "anyOf",
++                "oneOf",
++            ]
++            .iter()
++            .any(|key| object.contains_key(*key))
++        {
++            object.insert(
++                "type".to_string(),
++                json!(["string", "number", "boolean", "object", "array", "null"]),
++            );
++        }
++    }
++    // Visit only schema positions. Property names and literal values in
++    // defaults, const, enum, and examples are data, not schemas.
++    for key in [
++        "properties",
++        "patternProperties",
++        "$defs",
++        "definitions",
++        "dependentSchemas",
++        "dependencies",
++    ] {
++        if let Some(children) = object.get_mut(key).and_then(Value::as_object_mut) {
++            for child in children.values_mut() {
++                normalize_fireworks_schema(child);
++            }
++        }
++    }
++    for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
++        if let Some(children) = object.get_mut(key).and_then(Value::as_array_mut) {
++            for child in children {
++                normalize_fireworks_schema(child);
++            }
++        }
++    }
++    for key in [
++        "items",
++        "additionalItems",
++        "additionalProperties",
++        "unevaluatedItems",
++        "unevaluatedProperties",
++        "propertyNames",
++        "contains",
++        "not",
++        "if",
++        "then",
++        "else",
++    ] {
++        if let Some(child) = object.get_mut(key) {
++            if let Some(children) = child.as_array_mut() {
++                for child in children {
++                    normalize_fireworks_schema(child);
++                }
++            } else {
++                normalize_fireworks_schema(child);
++            }
++        }
++    }
+ }
+ 
+ fn set_json_model(body: &mut Value, model: &str) {
+@@ -1443,6 +1549,125 @@
+             .await?;
+         assert_eq!(response["input_tokens"], 7);
+         Ok(())
++    }
++
++    #[test]
++    fn fireworks_tool_schema_presence_keeps_constraints_and_literals() {
++        let presence = json!({"not": {"type": "null"}, "minLength": 1,
++            "pattern": "\\S", "minItems": 1, "minProperties": 1});
++        let typed = json!({"type": "string", "not": {"type": "null"}});
++        let mut schema = json!({
++            "type": "object",
++            "$defs": {"present": presence},
++            "properties": {
++                "not": presence,
++                "typed": typed,
++                "forbidden": false,
++                "ref": {"$ref": "#/$defs/present"},
++                "list": {"type": "array", "items": presence}
++            },
++            "oneOf": [{"required": ["query"], "properties": {"query": presence}}],
++            "allOf": [{"if": {"properties": {"operation": {"const": "search"}}},
++                "then": {"properties": {"query": presence}}}],
++            "default": presence, "const": presence, "enum": [presence], "examples": [presence]
++        });
++        let original = schema.clone();
++        normalize_fireworks_schema(&mut schema);
++        let mut expected = presence.clone();
++        expected["type"] = json!(["string", "number", "boolean", "object", "array"]);
++        for pointer in [
++            "/$defs/present",
++            "/properties/not",
++            "/properties/list/items",
++            "/oneOf/0/properties/query",
++            "/allOf/0/then/properties/query",
++        ] {
++            assert_eq!(schema.pointer(pointer), Some(&expected));
++        }
++        for key in ["default", "const", "enum", "examples"] {
++            assert_eq!(schema[key], original[key]);
++        }
++        assert_eq!(schema["properties"]["typed"], typed);
++        assert_eq!(schema["properties"]["forbidden"], false);
++        assert_eq!(schema["properties"]["ref"], original["properties"]["ref"]);
++        assert_eq!(schema["oneOf"][0]["required"], json!(["query"]));
++        assert!(schema["oneOf"][0].get("type").is_none());
++        assert!(schema["allOf"][0]["then"].get("type").is_none());
++        let once = schema.clone();
++        normalize_fireworks_schema(&mut schema);
++        assert_eq!(schema, once);
++    }
++
++    #[test]
++    fn fireworks_tool_schema_required_branches_keep_non_object_values() {
++        let mut schema = json!({
++            "type": "object",
++            "anyOf": [{"required": ["on"]}, {"required": ["brightness_percent"]}],
++            "not": {"required": ["color_xy", "color_temperature_kelvin"]},
++            "properties": {"required": {"type": "boolean"}},
++            "default": {"required": ["literal"]},
++            "examples": [{"required": ["literal"]}]
++        });
++        let original = schema.clone();
++        normalize_fireworks_schema(&mut schema);
++        let all_types = json!(["string", "number", "boolean", "object", "array", "null"]);
++        for pointer in ["/anyOf/0", "/anyOf/1", "/not"] {
++            let normalized = schema.pointer(pointer).unwrap();
++            assert_eq!(normalized["type"], all_types);
++            assert_eq!(
++                normalized["required"],
++                original.pointer(pointer).unwrap()["required"]
++            );
++        }
++        for key in ["type", "properties", "default", "examples"] {
++            assert_eq!(schema[key], original[key]);
++        }
++        let once = schema.clone();
++        normalize_fireworks_schema(&mut schema);
++        assert_eq!(schema, once);
++    }
++
++    #[test]
++    fn fireworks_tool_schema_normalization_is_provider_scoped() {
++        for (url, model, expected) in [
++            (
++                "https://api.fireworks.ai/inference/v1",
++                "accounts/custom/models/test",
++                true,
++            ),
++            (
++                "http://localhost/v1",
++                "accounts/fireworks/models/test",
++                true,
++            ),
++            ("https://example.com/v1", "other-model", false),
++        ] {
++            let backend = Backend::OpenAiChat(config(url));
++            let schema = json!({"not": {"type": "null"}});
++            let mut body = json!({"model": model,
++                "tools": [{"type": "function", "function": {"name": "test", "parameters": schema}}],
++                "functions": [{"name": "legacy", "parameters": schema}],
++                "response_format": {"type": "json_schema", "json_schema": {"schema": schema}},
++                "messages": [{"role": "user", "content": "test"}]
++            });
++            let original = body.clone();
++            normalize_fireworks_chat_tool_schemas(&mut body, &backend);
++            assert_eq!(
++                body["tools"][0]["function"]["parameters"]
++                    .get("type")
++                    .is_some(),
++                expected
++            );
++            assert_eq!(
++                body["functions"][0]["parameters"].get("type").is_some(),
++                expected
++            );
++            assert_eq!(body["response_format"], original["response_format"]);
++            assert_eq!(body["messages"], original["messages"]);
++            if !expected {
++                assert_eq!(body, original);
++            }
++        }
+     }
+ 
+     #[test]

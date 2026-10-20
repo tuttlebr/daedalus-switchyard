@@ -48,7 +48,7 @@ api_key_env = "LOCAL_API_KEY"
 
 [targets.local]
 id = "local"
-model = "nvidia/Muse-Glimmer-30B-NVFP4"
+model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 llm_client = "local"
 # ------------------------------------------------------------------------------
 [routes.stage]

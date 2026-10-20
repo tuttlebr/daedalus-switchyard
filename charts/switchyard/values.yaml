@@ -36,10 +36,28 @@ securityContext:
   runAsUser: 1000
 
 service:
-  type: NodePort
+  # Keep the established home-LAN NodePort. The unhandled class prevents a
+  # separate VIP; Cilium applies these source ranges to the NodePort frontend.
+  type: LoadBalancer
   port: 4000
   nodePort: 30260
-  annotations: {}
+  loadBalancerClass: daedalus.ai/nodeport-only
+  loadBalancerSourceRanges:
+    - 192.168.1.0/24
+  externalTrafficPolicy: Cluster
+  annotations:
+    service.cilium.io/src-ranges-policy: allow
+
+networkPolicy:
+  allowedExternalCIDRs:
+    - 192.168.1.0/24
+  allowNodePortSNAT: true
+  # CiliumInternalIPs used when NodePort traffic crosses to the backend node.
+  nodeSourceCIDRs:
+    - 10.0.1.110/32
+    - 10.0.3.70/32
+    - 10.0.2.190/32
+    - 10.0.4.144/32
 
 config:
   logFilter: info

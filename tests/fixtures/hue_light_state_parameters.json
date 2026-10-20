@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "State": {
+      "additionalProperties": false,
+      "properties": {
+        "on": {
+          "title": "On",
+          "type": "boolean"
+        },
+        "brightness_percent": {
+          "title": "Brightness Percent",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "color_xy": {
+          "$ref": "#/$defs/XY"
+        },
+        "color_temperature_kelvin": {
+          "title": "Color Temperature Kelvin",
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "transition_ms": {
+          "title": "Transition Ms",
+          "maximum": 60000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "title": "State",
+      "type": "object",
+      "anyOf": [
+        {
+          "required": [
+            "on"
+          ]
+        },
+        {
+          "required": [
+            "brightness_percent"
+          ]
+        },
+        {
+          "required": [
+            "color_xy"
+          ]
+        },
+        {
+          "required": [
+            "color_temperature_kelvin"
+          ]
+        }
+      ],
+      "not": {
+        "required": [
+          "color_xy",
+          "color_temperature_kelvin"
+        ]
+      }
+    },
+    "XY": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "XY",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "light_id": {
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "title": "Light Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/State"
+    }
+  },
+  "required": [
+    "light_id",
+    "state"
+  ],
+  "title": "LightArgs",
+  "type": "object"
+}

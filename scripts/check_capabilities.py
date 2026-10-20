@@ -152,8 +152,25 @@ def exchange(url, key, body, api, timeout):
             for choice in value.get("choices", []):
                 require(choice.get("index", 0) == 0, "multiple_choices")
                 delta = choice.get("delta", {})
+                parts = delta.get("tool_calls")
+                require(parts is None or isinstance(parts, list), "invalid_tool_calls")
+                next_finish = choice.get("finish_reason")
+                # Some Chat providers (including Mercury) use stop for completed
+                # tool calls. The roundtrip still validates IDs and JSON arguments.
+                if next_finish == "stop" and (calls or parts):
+                    next_finish = "tool_calls"
+                if finish is not None:
+                    # Mercury repeats the finish reason in an empty final chunk.
+                    # Accept that repetition, but reject new data or a changed reason.
+                    require(
+                        not delta.get("content")
+                        and not parts
+                        and next_finish in (None, finish),
+                        "duplicate_terminal",
+                    )
                 text += delta.get("content") or ""
-                for part in delta.get("tool_calls", []):
+                # Optional Chat delta fields may be explicitly null.
+                for part in parts or []:
                     call = calls.setdefault(
                         part["index"],
                         {
@@ -167,9 +184,8 @@ def exchange(url, key, body, api, timeout):
                         call["function"][field] += (
                             part.get("function", {}).get(field) or ""
                         )
-                if choice.get("finish_reason") is not None:
-                    require(finish is None, "duplicate_terminal")
-                    finish = choice["finish_reason"]
+                if next_finish is not None:
+                    finish = next_finish
     if api == "openai_responses":
         require(
             completed is not None and completed.get("status") == "completed",

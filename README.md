@@ -23,6 +23,23 @@ that model's name. `routes_coreweave.toml` uses the same automatic routing polic
 with its own provider settings. The `/local` route is a separate, explicitly
 requested Dynamo model.
 
+`routes_inception.toml` uses Inception Labs' `mercury-3` through its
+[OpenAI-compatible Chat Completions API](https://docs.inceptionlabs.ai/get-started)
+at `https://api.inceptionlabs.ai/v1`, with `INCEPTION_API_KEY`. It defines all four
+[supported reasoning efforts](https://docs.inceptionlabs.ai/capabilities/reasoning-efforts):
+`instant`, `low`, `medium`, and `high`. Automatic Composite routing uses the same
+local Clef decision service, selecting low for simple work, medium for bounded
+multi-step work, and high for substantive code, briefings, complex tasks and
+fallback. Low and medium require 0.90 choice probability; high is the fallback.
+These are initial routing policies, not calibrated Mercury task-success rates.
+`daedalus/high`, `/medium`, `/low`, and `/instant` select their named efforts;
+`/max`, `/xhigh`, and `/deep` alias high, while `/none` aliases instant. Instant
+and `/local` remain explicit choices. Caller-supplied reasoning effort overrides
+target defaults and must use a Mercury-supported value; route aliases do not
+translate unsupported caller effort values. The local route also requires
+`LOCAL_API_KEY`. Validate with `make validate ROUTES_FILE=routes_inception.toml`;
+the existing Makefile discovers `make deploy-route_inception` automatically.
+
 ## Daedalus request path
 
 ```mermaid
@@ -50,7 +67,7 @@ Chat Completions completed, so this upstream transport is intentional.
 | `daedalus/medium` | `medium` | `medium` | Fixed requested medium effort |
 | `daedalus/low` | `low` | `low` | Explicit latency-oriented choice |
 | `daedalus/none` | `low` | `low` | Compatibility alias; thinking remains enabled |
-| `daedalus/local` | `local` | N/A | `nvidia/Muse-Glimmer-30B-NVFP4` on local Dynamo |
+| `daedalus/local` | `local` | N/A | `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` with LiLiCorr on local Dynamo |
 
 The effort column describes the value sent on the wire. Live GLM probes accepted
 `low`, `medium`, `high`, `xhigh`, and `max` on October 6, 2026; that does not prove
@@ -148,6 +165,20 @@ shared runner, provider transport, auxiliary operations, and decision metadata.
 thinking attached to tool calls; generic `reasoning` is rejected by Fireworks.
 Other providers keep their existing representation. Conflicting or opaque
 reasoning fails explicitly rather than being silently dropped.
+`patches/fireworks-tool-schema.patch` adds explicit type unions to untyped
+tool-parameter presence constraints. This covers both `not: {type: "null"}`
+(RSS search/discovery) and required-only branches (Hue state/scene changes). Fireworks
+otherwise rejects these schemas with HTTP 400, even with `strict: false`.
+Required-only schemas receive all JSON types because JSON Schema's `required`
+keyword also accepts non-object values; non-null constraints exclude null.
+Branches already described by `properties`, references, enums, or composition
+keep their existing representation.
+The conversion retains every original constraint, reference, and literal value,
+including branches inside `anyOf`, `oneOf`, and `not`. It applies only to Fireworks
+tool parameters. The agent still validates arguments before execution.
+Regression fixtures cover the deployed Hue schema and RSS presence constraints
+through both Responses and Chat Completions, buffered and streaming. Basic route
+smoke tests alone do not exercise tool-schema compatibility.
 **Rebuild the image before deploying this Fireworks configuration**; the unpatched
 image rejects the `model` field.
 
@@ -359,7 +390,8 @@ and [Fireworks structured outputs](https://docs.fireworks.ai/structured-response
 
 ## Files
 
-- `routes_coreweave.toml`, `routes_fireworks.toml`, `routes_openai.toml`, and `routes_local.toml` are the
+- `routes_coreweave.toml`, `routes_fireworks.toml`, `routes_inception.toml`,
+  `routes_openai.toml`, and `routes_local.toml` are the
   selectable deployment sources for clients, targets, and routes.
 - `charts/switchyard/` contains the Helm chart.
 - `Dockerfile` builds the pinned upstream v0.3.0 commit with the target-model alias
@@ -471,9 +503,37 @@ creates matching Kubernetes Secret keys, and injects those keys into the
 Switchyard container. It does not place credential values in Helm values or the
 ConfigMap.
 
+Before changing the release, the deployment capability gate probes every target.
+The local Dynamo endpoint is
+`http://inference-gateway.daedalus-dynamo.svc.cluster.local:32359/v1` and requires
+`LOCAL_API_KEY`. Switchyard uses Kubernetes DNS to reach the internal Service.
+The capability gate reaches cluster-local HTTP endpoints through a temporary
+localhost `kubectl port-forward` in the selected Kubernetes context.
+The gateway must provide an HTTP listener on this Service port.
+
 The script fixes the namespace to `daedalus`, release name to `switchyard`, and
 Secret name to `switchyard-api-key` by default. Override `RELEASE_NAME` or
 `SECRET_NAME` only when you also intend to change those resource names.
+
+Deployment leaves an existing shared namespace untouched. After the capability
+gate passes, it backs up live release resources and the API-key Secret under
+`.deploy-backups/` (private, ignored by Git; override with `DEPLOY_BACKUP_DIR`).
+It repairs missing Helm ownership metadata only on the two Switchyard network
+policies, after checking their release labels, existing ownership and complete
+rules against the rendered chart. Conflicting owners or different rules stop
+deployment before changing the Secret or release.
+
+The intentional `daedalus.ai/nodeport-only` LoadBalancer class never receives a
+VIP, so deployment checks the pod rollout, ready EndpointSlices and HTTP health
+instead of Helm's load-balancer wait. Other Service configurations retain Helm's
+wait. If upgrade or readiness fails, the script restores the saved live resources
+using a recovery Helm chart and restores the prior Secret. This preserves the
+actual NodePort and policies even when older Helm revisions predate LAN access.
+The printed backup directory also contains `restore.sh` for manual recovery:
+`bash .deploy-backups/<deployment>/restore.sh`. Recovery creates a Helm revision;
+the next normal deployment uses the regular chart again. Keep backups private
+because they contain credentials. Avoid rolling back to an old Helm revision
+that records a ClusterIP-only Service.
 
 Each invocation adds a new non-secret restart annotation to the pod template.
 This makes Secret and mutable image-tag updates take effect in newly started
@@ -488,21 +548,29 @@ The default scheduling contract requires `amd64` and excludes the ARM64
 
 ## Call the route
 
-The Service defaults to `NodePort` and pins the external port to `30260`. From
-a network that can reach a cluster node, use this base URL:
-
-```text
-http://<node-ip>:30260/v1
-```
-
-Inside the cluster, use this base URL:
+The Service preserves HTTP NodePort `30260` for home-LAN clients in
+`192.168.1.0/24`. For example, a home service can use
+`http://192.168.1.234:30260/v1`; the same port works on each cluster node.
+The chart's ingress policy also permits the Daedalus agent and Hindsight API
+pods in the same namespace. Those consumers use:
 
 ```text
 http://switchyard.daedalus.svc.cluster.local:4000/v1
 ```
 
-Set `service.type=ClusterIP` to disable node-level exposure; the chart omits the
-configured `service.nodePort` unless the Service type supports node ports.
+The Service uses `LoadBalancer` with the unhandled
+`daedalus.ai/nodeport-only` class to retain a fixed NodePort without allocating
+a separate VIP. Cilium's `bpf.lbSourceRangeAllTypes=true` setting applies
+`service.loadBalancerSourceRanges` before cross-node SNAT. The accompanying
+policy permits node forwarding on port `4000`; it does not grant unrelated
+pods access. Keep the source-range filter enabled when changing these policies.
+If node CiliumInternalIPs change, refresh `networkPolicy.nodeSourceCIDRs`.
+
+Switchyard's caller interface keeps its existing HTTP contract without adding
+a new bearer-key requirement. `LOCAL_API_KEY` authenticates the separate
+upstream internal inference connection; it is not a Switchyard client password.
+For local operator checks, `make test` and authenticated Kubernetes port
+forwarding remain available.
 
 For example:
 

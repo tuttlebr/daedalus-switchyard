@@ -1,0 +1,60 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "switchyard.fullname" . }}-consumers
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "switchyard.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "switchyard.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daedalus
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: hindsight
+              app.kubernetes.io/component: api
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+{{- if and .Values.networkPolicy.allowNodePortSNAT (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) }}
+---
+# The Service's Cilium source-range filter checks the original LAN source before
+# cross-node SNAT. These grants permit delivery from that receiving node only.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "switchyard.fullname" . }}-nodeport-ingress
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "switchyard.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "switchyard.selectorLabels" . | nindent 6 }}
+  ingress:
+    - fromEntities: [host, remote-node]
+      toPorts:
+        - ports:
+            - port: {{ .Values.service.port | quote }}
+              protocol: TCP
+    {{- with concat .Values.networkPolicy.allowedExternalCIDRs .Values.networkPolicy.nodeSourceCIDRs }}
+    - fromCIDR:
+        {{- toYaml . | nindent 8 }}
+      toPorts:
+        - ports:
+            - port: {{ $.Values.service.port | quote }}
+              protocol: TCP
+    {{- end }}
+{{- end }}

@@ -459,6 +459,82 @@ class FireworksChatTransportTest(unittest.TestCase):
             self.assertEqual(body["tool_choice"], "none")
             self.assertTrue(body["parallel_tool_calls"])
 
+    def test_presence_constraints_reach_fireworks_with_explicit_non_null_types(self):
+        # The deployed RSS tool uses this presence constraint inside oneOf.
+        # Fireworks rejects it without type, even when strict is false.
+        presence = {
+            "not": {"type": "null"},
+            "minLength": 1,
+            "pattern": r"\S",
+            "minItems": 1,
+            "minProperties": 1,
+        }
+        parameters = {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "queries": {
+                    "anyOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "null"},
+                    ]
+                },
+            },
+            "oneOf": [
+                {"required": ["query"], "properties": {"query": presence, "queries": False}},
+                {"required": ["queries"], "properties": {"queries": presence, "query": False}},
+            ],
+            "additionalProperties": False,
+        }
+        expected = json.loads(json.dumps(parameters))
+        for branch, field in zip(expected["oneOf"], ("query", "queries")):
+            branch["properties"][field]["type"] = [
+                "string", "number", "boolean", "object", "array"
+            ]
+        self.assert_tool_schema_transport(parameters, expected)
+
+    def test_hue_required_only_constraints_keep_references_and_exclusions(self):
+        # Captured from the deployed Hue set_light_state tool. The required-only
+        # branches caused production HTTP 400s despite the RSS regression passing.
+        parameters = json.loads(
+            (ROOT / "tests/fixtures/hue_light_state_parameters.json").read_text()
+        )
+        expected = json.loads(json.dumps(parameters))
+        state = expected["$defs"]["State"]
+        for branch in [*state["anyOf"], state["not"]]:
+            branch["type"] = [
+                "string", "number", "boolean", "object", "array", "null"
+            ]
+        self.assert_tool_schema_transport(parameters, expected)
+
+    def assert_tool_schema_transport(self, parameters, expected):
+        tool = {"type": "function", "name": "schema_probe", "parameters": parameters}
+        with self.router() as (url, captured, _config):
+            for endpoint in ("responses", "chat/completions"):
+                for stream in (False, True):
+                    with self.subTest(endpoint=endpoint, stream=stream):
+                        if endpoint == "responses":
+                            self.request(url, model="daedalus/high", tools=[tool], stream=stream)
+                        else:
+                            request = Request(
+                                url + "/v1/chat/completions",
+                                data=json.dumps({
+                                    "model": "daedalus/high",
+                                    "messages": [{"role": "user", "content": "Say OK."}],
+                                    "stream": stream,
+                                    "tools": [{"type": "function", "function": {
+                                        key: value for key, value in tool.items() if key != "type"
+                                    }}],
+                                }).encode(),
+                                headers={"Content-Type": "application/json"},
+                            )
+                            with urlopen(request, timeout=5) as response:
+                                self.assertEqual(response.status, 200)
+                                response.read()
+                        path, body, _headers = captured.get(timeout=5)
+                        self.assertEqual(path, "/v1/chat/completions")
+                        self.assertEqual(body["tools"][0]["function"]["parameters"], expected)
+
     def test_credential_redaction_preserves_large_reasoning_and_tool_arguments(self):
         with self.router(redaction_key="nabc") as (url, captured, _config):
             request = Request(

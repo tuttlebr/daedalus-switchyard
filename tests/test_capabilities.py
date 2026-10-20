@@ -21,7 +21,10 @@ spec.loader.exec_module(probe)
 
 
 class Capabilities(unittest.TestCase):
-    def exercise(self, api, fault=None):
+    def exercise(
+        self, api, fault=None, *, nullable_tool_calls=False,
+        repeat_terminal=False, tool_finish_reason="tool_calls",
+    ):
         seen = []
 
         class Peer(BaseHTTPRequestHandler):
@@ -68,19 +71,46 @@ class Capabilities(unittest.TestCase):
                         if calling
                         else {"content": text}
                     )
+                    if nullable_tool_calls:
+                        delta.setdefault("tool_calls", None)
+                    if fault == "invalid_tool_calls":
+                        delta["tool_calls"] = "not-a-list"
                     event = {
                         "model": "fixture",
                         "choices": [
                             {
                                 "index": 0,
                                 "delta": delta,
-                                "finish_reason": "tool_calls" if calling else "stop",
+                                "finish_reason": tool_finish_reason if calling else "stop",
                             }
                         ],
                     }
-                    self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+                    payload = f"data: {json.dumps(event)}\n\n".encode()
+                    if repeat_terminal:
+                        terminal = {
+                            "model": "fixture",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": (
+                                        {"content": "unexpected"}
+                                        if fault == "post_terminal_content"
+                                        else {"content": None, "tool_calls": None}
+                                        if nullable_tool_calls
+                                        else {}
+                                    ),
+                                    "finish_reason": (
+                                        "length"
+                                        if fault == "conflicting_terminal"
+                                        else "tool_calls" if calling else "stop"
+                                    ),
+                                }
+                            ],
+                        }
+                        payload += f"data: {json.dumps(terminal)}\n\n".encode()
                     if fault != "missing_terminal":
-                        self.wfile.write(b"data: [DONE]\n\n")
+                        payload += b"data: [DONE]\n\n"
+                    self.wfile.write(payload)
                 elif fault != "missing_terminal":
                     item = (
                         {
@@ -134,6 +164,49 @@ class Capabilities(unittest.TestCase):
         for api in ("openai_chat", "openai_responses"):
             with self.subTest(api=api):
                 self.exercise(api)
+
+    def test_nullable_tool_calls_and_repeated_empty_chat_terminal(self):
+        # Mercury can send tool_calls: null and repeat the finish reason in
+        # an empty chunk after the last content/tool-call chunk.
+        for nullable, repeated in ((True, False), (False, True), (True, True)):
+            with self.subTest(nullable=nullable, repeated=repeated):
+                self.exercise(
+                    "openai_chat",
+                    nullable_tool_calls=nullable,
+                    repeat_terminal=repeated,
+                )
+
+    def test_chat_stream_validation_remains_strict(self):
+        for fault, code in (
+            ("invalid_tool_calls", "invalid_tool_calls"),
+            ("conflicting_terminal", "duplicate_terminal"),
+            ("post_terminal_content", "duplicate_terminal"),
+            ("missing_terminal", "missing_terminal"),
+        ):
+            with self.subTest(fault=fault), self.assertRaisesRegex(probe.CheckFailed, code):
+                self.exercise(
+                    "openai_chat", fault,
+                    nullable_tool_calls=True,
+                    repeat_terminal=True,
+                )
+
+    def test_stop_can_finish_a_complete_tool_call(self):
+        for repeated in (False, True):
+            with self.subTest(repeated=repeated):
+                self.exercise(
+                    "openai_chat",
+                    nullable_tool_calls=True,
+                    repeat_terminal=repeated,
+                    tool_finish_reason="stop",
+                )
+        for fault in ("arguments", "invented_result"):
+            with self.subTest(fault=fault), self.assertRaises(probe.CheckFailed):
+                self.exercise(
+                    "openai_chat", fault,
+                    nullable_tool_calls=True,
+                    repeat_terminal=True,
+                    tool_finish_reason="stop",
+                )
 
     def test_failures_reject_promotion(self):
         for api in ("openai_chat", "openai_responses"):

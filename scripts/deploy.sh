@@ -32,7 +32,7 @@ fi
 # operator edits the source TOML while the capability requests are running.
 gate_snapshot_dir="$(mktemp -d)"
 readonly gate_snapshot_dir
-trap 'rm -f -- "${gate_snapshot_dir}/routes.toml" "${gate_snapshot_dir}/api-keys.env"; rmdir -- "${gate_snapshot_dir}"' EXIT
+trap 'rm -rf -- "${gate_snapshot_dir}"' EXIT
 cp -- "${ROUTES_FILE}" "${gate_snapshot_dir}/routes.toml"
 ROUTES_FILE="${gate_snapshot_dir}/routes.toml"
 
@@ -125,7 +125,7 @@ fi
 
 helm lint "${CHART_DIR}" "${helm_validation_args[@]}"
 helm template "${RELEASE_NAME}" "${CHART_DIR}" \
-  --namespace "${NAMESPACE}" "${helm_validation_args[@]}" >/dev/null
+  --namespace "${NAMESPACE}" "${helm_validation_args[@]}" >"${gate_snapshot_dir}/manifest.yaml"
 
 # A listed model and a healthy pod do not prove generation or tool support.
 # Run before any namespace/Secret/release mutation; a failure leaves live routes intact.
@@ -133,7 +133,41 @@ python3 "${PROJECT_DIR}/scripts/check_capabilities.py" "${ROUTES_FILE}" \
   --timeout "${CAPABILITY_TIMEOUT:-60}" \
   --max-output-tokens "${CAPABILITY_MAX_OUTPUT_TOKENS:-4096}"
 
-kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+python3 "${PROJECT_DIR}/scripts/deploy_state.py" \
+  --manifest "${gate_snapshot_dir}/manifest.yaml" \
+  --state "${gate_snapshot_dir}/state.json" \
+  --backup-root "${DEPLOY_BACKUP_DIR:-${PROJECT_DIR}/.deploy-backups}" \
+  --namespace "${NAMESPACE}" --release "${RELEASE_NAME}" \
+  --secret "${SECRET_NAME}" --context "${EXPECTED_CONTEXT}" --timeout "${HELM_TIMEOUT}"
+mapfile -t deployment_state < <(
+  python3 - "${gate_snapshot_dir}/state.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+print(state["backup"])
+print("true" if state["nodeport_only"] else "false")
+print("true" if state["can_restore"] else "false")
+PY
+)
+deployment_backup="${deployment_state[0]}"
+
+recover_deployment() {
+  local status=$?
+  trap - ERR
+  echo "Deployment failed; recovery snapshot: ${deployment_backup}" >&2
+  if [[ "${deployment_state[2]}" == true ]]; then
+    bash "${deployment_backup}/restore.sh" || \
+      echo "Automatic recovery failed; retry: bash '${deployment_backup}/restore.sh'" >&2
+  fi
+  exit "${status}"
+}
+trap recover_deployment ERR
+set -E
+
+# The namespace is shared infrastructure. Do not apply an empty namespace
+# manifest over it just to ensure it exists.
+if [[ -z "$(kubectl get namespace "${NAMESPACE}" --ignore-not-found -o name)" ]]; then
+  kubectl create namespace "${NAMESPACE}"
+fi
 if ((${#api_key_env_names[@]} > 0)); then
   api_key_env_file="${gate_snapshot_dir}/api-keys.env"
   touch "${api_key_env_file}"
@@ -152,9 +186,6 @@ helm_args=(
   upgrade --install "${RELEASE_NAME}" "${CHART_DIR}"
   --namespace "${NAMESPACE}"
   --create-namespace
-  --atomic
-  --cleanup-on-fail
-  --wait
   --timeout "${HELM_TIMEOUT}"
   --history-max 10
   --set-string "fullnameOverride=${RELEASE_NAME}"
@@ -165,6 +196,13 @@ helm_args=(
   --set-string "${restart_annotation}"
   --set-file "config.routesToml=${ROUTES_FILE}"
 )
+
+# Helm waits forever for an ingress IP on the intentional NodePort-only class.
+# Explicit rollout, EndpointSlice and HTTP checks below gate success instead.
+# On failure recover the live snapshot, not potentially stale Helm networking.
+if [[ "${deployment_state[1]}" != true ]]; then
+  helm_args+=(--wait)
+fi
 
 if [[ -n "${IMAGE_DIGEST:-}" ]]; then
   helm_args+=(--set-string "image.digest=${IMAGE_DIGEST}")
@@ -190,7 +228,7 @@ for ((attempt = 1; attempt <= 30; attempt++)); do
 done
 if [[ -z "${ready_addresses}" ]]; then
   echo "deployment has no ready Service endpoints" >&2
-  exit 1
+  false
 fi
 
 kubectl --request-timeout=15s get --raw \
