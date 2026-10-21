@@ -1,4 +1,24 @@
 schema_version = 1
+# Daedalus mixed-provider policy, selected 2026-10-20.
+# Automatic: Mercury 3 low for mechanical work; DeepSeek V4.1 Flash 1017
+# high/xhigh/max for research, briefings, code, HTML and difficult recovery.
+# /medium and /instant explicitly select Mercury's medium and instant efforts.
+# /none remains an alias of /low; /deep remains an alias of /xhigh.
+#
+# Selection evidence: Artificial Analysis v4.3.2 rates DeepSeek 1017 (max)
+# above GLM-5.2 (max), 45 vs 34. This supports choosing DeepSeek for demanding
+# tasks; it does not benchmark every effort or prove Daedalus task success.
+# https://artificialanalysis.ai/models/deepseek-v4-1-flash-1017
+# https://artificialanalysis.ai/models/glm-5-2
+# Mercury's low/medium modes provide the latency-oriented choices. Its new
+# release lacks a comparable independent AA score; keep automatic use gated.
+# https://docs.inceptionlabs.ai/capabilities/reasoning-efforts
+#
+# Credentials remain separate environment references, discovered by deploy.sh:
+# FIREWORKS_API_KEY, INCEPTION_API_KEY, LOCAL_API_KEY. No unused client/key needed.
+# Keep each provider's extra_body fields scoped to its own targets. Caller
+# reasoning effort overrides defaults and must be supported by the chosen model.
+# Composite failures retain the existing max fallback; no provider rotation is added.
 # ------------------------------------------------------------------------------
 [llm_clients.fireworks]
 format = "openai_chat"
@@ -9,42 +29,58 @@ api_key_env = "FIREWORKS_API_KEY"
 id = "max"
 model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "max", reasoning_history = "disabled" }
+extra_body = { reasoning_effort = "max", reasoning_history = "interleaved" }
 
 [targets.xhigh]
 id = "xhigh"
 model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "xhigh", reasoning_history = "disabled" }
+extra_body = { reasoning_effort = "xhigh", reasoning_history = "interleaved" }
 
 [targets.high]
 id = "high"
 model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "high", reasoning_history = "disabled" }
+extra_body = { reasoning_effort = "high", reasoning_history = "interleaved" }
+
+# Inception accepts instant/low/medium/high; never send xhigh/max to Mercury.
+[llm_clients.inception]
+format = "openai_chat"
+base_url = "https://api.inceptionlabs.ai/v1"
+api_key_env = "INCEPTION_API_KEY"
 
 [targets.medium]
 id = "medium"
-model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
-llm_client = "fireworks"
-extra_body = { reasoning_effort = "medium", reasoning_history = "disabled" }
+model = "mercury-3"
+llm_client = "inception"
+extra_body = { reasoning_effort = "high" }
 
 [targets.low]
 id = "low"
-model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
-llm_client = "fireworks"
-extra_body = { reasoning_effort = "low", reasoning_history = "disabled" }
+model = "mercury-3"
+llm_client = "inception"
+extra_body = { reasoning_effort = "medium" }
+
+# Lowest latency is opt-in; retain low's reasoning in the automatic pool.
+[targets.instant]
+id = "instant"
+model = "mercury-3"
+llm_client = "inception"
+extra_body = { reasoning_effort = "low" }
 
 # ------------------------------------------------------------------------------
 [llm_clients.local]
 format = "openai_responses"
-base_url = "http://inference-gateway.daedalus-dynamo.svc.cluster.local:32359/v1"
+# Use this model's existing cluster-only HTTP frontend. The shared inference
+# gateway's port 32359 requires TLS, and its certificate does not cover service DNS.
+base_url = "http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
 api_key_env = "LOCAL_API_KEY"
 
 [targets.local]
 id = "local"
 model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 llm_client = "local"
+extra_body = { chat_template_kwargs = { enable_thinking = true } }
 # ------------------------------------------------------------------------------
 [routes.stage]
 id = "daedalus"
@@ -160,15 +196,26 @@ capable_hold_turns = 2
 
 [routes.stage.stage.tool_semantics]
 observe = [
-  "get_memory", "current_datetime_tool", "perplexity_search_tool",
-  "webscrape_tool", "domain_retriever_tool", "nvidia_docs_tool",
-  "curated_feed_search_tool", "tool_output_retriever_tool",
-  "source_verifier_tool", "agent_skills_tool",
-  "hue_mcp_server__get_bridge_status", "hue_mcp_server__list_resources",
-  "hue_mcp_server__get_resource",
+    "get_memory",
+    "current_datetime_tool",
+    "perplexity_search_tool",
+    "webscrape_tool",
+    "domain_retriever_tool",
+    "nvidia_docs_tool",
+    "curated_feed_search_tool",
+    "tool_output_retriever_tool",
+    "source_verifier_tool",
+    "agent_skills_tool",
+    "hue_mcp_server__get_bridge_status",
+    "hue_mcp_server__list_resources",
+    "hue_mcp_server__get_resource",
 ]
 mutate = ["add_memory", "hue_mcp_server__set_light_state"]
-new = ["briefing_renderer_tool", "content_distiller_tool", "hue_mcp_server__connect"]
+new = [
+    "briefing_renderer_tool",
+    "content_distiller_tool",
+    "hue_mcp_server__connect",
+]
 
 # ------------------------------------------------------------------------------
 [routes.max]
@@ -210,6 +257,14 @@ reasoning = true
 id = "daedalus/low"
 type = "passthrough"
 target = "low"
+tool_calling = true
+reasoning = true
+
+# Explicit latency profile, outside Clef's automatic choices.
+[routes.instant]
+id = "daedalus/instant"
+type = "passthrough"
+target = "instant"
 tool_calling = true
 reasoning = true
 

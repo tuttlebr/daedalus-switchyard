@@ -504,12 +504,20 @@ Switchyard container. It does not place credential values in Helm values or the
 ConfigMap.
 
 Before changing the release, the deployment capability gate probes every target.
-The local Dynamo endpoint is
-`http://inference-gateway.daedalus-dynamo.svc.cluster.local:32359/v1` and requires
-`LOCAL_API_KEY`. Switchyard uses Kubernetes DNS to reach the internal Service.
-The capability gate reaches cluster-local HTTP endpoints through a temporary
-localhost `kubectl port-forward` in the selected Kubernetes context.
-The gateway must provide an HTTP listener on this Service port.
+`routes_custom.toml` uses the existing cluster-only Dynamo frontend at
+`http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`
+for its local model. Switchyard reaches this Service through Kubernetes DNS;
+the capability gate uses a temporary localhost `kubectl port-forward` in the
+selected Kubernetes context. This direct path is tied to the Bolt deployment
+and bypasses the shared gateway; it retains the configured `LOCAL_API_KEY` header,
+but the frontend does not enforce the gateway's authentication policy.
+
+The shared inference gateway on port 32359 accepts HTTPS and presents a
+certificate for `daedalus.ddns.me`. Sending HTTP to that port produces
+`BadStatusLine`; changing only the scheme on a `*.svc.cluster.local` URL also
+fails because the certificate does not cover that name (the capability gate
+currently rejects cluster-local HTTPS). Other route variants still referencing
+the gateway's HTTP URL need a compatible endpoint before deployment.
 
 The script fixes the namespace to `daedalus`, release name to `switchyard`, and
 Secret name to `switchyard-api-key` by default. Override `RELEASE_NAME` or
