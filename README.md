@@ -16,7 +16,7 @@ It deploys a non-root Helm workload in the `daedalus` namespace. The Fireworks c
 exposes model `daedalus` on the OpenAI Chat Completions, OpenAI Responses, and
 Anthropic Messages endpoints.
 
-`routes_fireworks.toml` implements Composite routing for automatic effort and
+`routes_custom.toml` implements Composite routing for automatic effort and
 exposes explicit effort routes. All Fireworks effort targets use the configured
 provider model; the routing policy describes task requirements independently of
 that model's name. `routes_coreweave.toml` uses the same automatic routing policy
@@ -49,7 +49,7 @@ flowchart LR
   B -->|deep / xhigh / max / other explicit route| D[fixed effort target]
   C --> E[Fireworks: Chat Completions]
   D --> E
-  B -->|daedalus/local| F[Local Dynamo: Responses API]
+  B -->|daedalus/local| F[Local Dynamo: Chat Completions]
 ```
 
 Switchyard translates Responses input, tool calls/results, reasoning history,
@@ -66,15 +66,16 @@ Chat Completions completed, so this upstream transport is intentional.
 | `daedalus/high` | `high` | `high` | Fixed high effort |
 | `daedalus/medium` | `medium` | `medium` | Fixed requested medium effort |
 | `daedalus/low` | `low` | `low` | Explicit latency-oriented choice |
-| `daedalus/none` | `low` | `low` | Compatibility alias; thinking remains enabled |
-| `daedalus/local` | `local` | N/A | `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` with LiLiCorr on local Dynamo |
+| `daedalus/none` | `none` | N/A | Custom profile: local nonthinking default; OpenAI profile: cloud instant alias |
+| `daedalus/local` | `local` | N/A | `Qwen/Qwen3.8-27B-FP8` on local Dynamo / L40S |
 
 The effort column describes the value sent on the wire. Live GLM probes accepted
 `low`, `medium`, `high`, `xhigh`, and `max` on October 6, 2026; that does not prove
 five distinct internal compute tiers. The provider explicitly rejected `none`
-because GLM 5.3 is thinking-only. `/none` therefore aliases `/low` and preserves
-reasoning between tool calls within the current user turn. It does not send
-`reasoning_effort="none"` or discard in-turn reasoning.
+because GLM 5.3 is thinking-only. `/none` is provider-specific: the custom profile
+uses its local nonthinking target, and the OpenAI profile uses its cloud instant
+target. Neither sends `reasoning_effort="none"` to GLM. Use the dedicated
+`daedalus/hindsight-local` alias when Hindsight text maintenance must stay local.
 
 Daedalus selects profiles before Switchyard selects targets. Explicit request
 profiles take precedence. With automatic selection, daily-summary requests
@@ -196,7 +197,7 @@ before applying these target defaults.
 
 ## Automatic reasoning routing
 
-`routes_fireworks.toml` uses Composite routing for `daedalus` with a native
+`routes_custom.toml` uses Composite routing for `daedalus` with a native
 Cloudflare Clef-Flash decision classifier. It targets the service configured in
 `../decision-api`:
 
@@ -354,7 +355,7 @@ only synthetic inputs. Override the base URL when using a port-forward:
 
 ```bash
 kubectl -n daedalus port-forward service/decision-api 30090:30000
-python3 scripts/test_decision_judge.py routes_fireworks.toml \
+python3 scripts/test_decision_judge.py routes_custom.toml \
   --base-url http://127.0.0.1:30090/v1 --output /tmp/clef-routing-probe.json
 ```
 
@@ -390,7 +391,7 @@ and [Fireworks structured outputs](https://docs.fireworks.ai/structured-response
 
 ## Files
 
-- `routes_coreweave.toml`, `routes_fireworks.toml`, `routes_inception.toml`,
+- `routes_coreweave.toml`, `routes_custom.toml`, `routes_inception.toml`,
   `routes_openai.toml`, and `routes_local.toml` are the
   selectable deployment sources for clients, targets, and routes.
 - `charts/switchyard/` contains the Helm chart.
@@ -429,7 +430,7 @@ SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
 ## Test deployed routes
 
 ```bash
-make test routes_fireworks.toml
+make test routes_custom.toml
 # Equivalent, with the default routes file:
 make test
 make test ROUTES_FILE=routes_local.toml
@@ -437,7 +438,7 @@ make test ROUTES_FILE=routes_local.toml
 
 This sends one live, non-streaming `/v1/responses` request for **every entry in
 `[routes]`**, using its `id` as the requested model. For the Fireworks file,
-that includes `stage`, `max`, `xhigh`, `deep`, `high`, `medium`, `low`, `none`, and `local`.
+that includes `stage`, `max`, `xhigh`, `deep`, `high`, `medium`, `low`, `none`, `local`, and `hindsight-local`.
 The TOML selects the
 route IDs to test; the running server supplies their routing policy, upstream
 settings, and credentials. Deploy the intended TOML first. This command does
@@ -450,8 +451,8 @@ the deployed Service and pods. You can instead supply a reachable Switchyard
 URL (with or without `/v1`), which does not require `kubectl`:
 
 ```bash
-make test routes_fireworks.toml TEST_BASE_URL=http://localhost:4000/v1
-make test routes_fireworks.toml TEST_TIMEOUT=180 TEST_MAX_OUTPUT_TOKENS=8192
+make test routes_custom.toml TEST_BASE_URL=http://localhost:4000/v1
+make test routes_custom.toml TEST_TIMEOUT=180 TEST_MAX_OUTPUT_TOKENS=8192
 ```
 
 The prompt asks for `OK`, with a default budget of 4096 output tokens to allow
@@ -505,7 +506,7 @@ ConfigMap.
 
 Before changing the release, the deployment capability gate probes every target.
 `routes_custom.toml` uses the existing cluster-only Dynamo frontend at
-`http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`
+`http://qwen38-27b-vllm-l40s-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`
 for its local model. Switchyard reaches this Service through Kubernetes DNS;
 the capability gate uses a temporary localhost `kubectl port-forward` in the
 selected Kubernetes context. This direct path is tied to the Bolt deployment
@@ -592,3 +593,25 @@ Routed responses include `x-model-router-selected-model` and, when available,
 `x-model-router-rationale`. With the Fireworks aliases, the selected-model
 header identifies the target, such as `high`, `low`, or `xhigh`; the request sent
 to Fireworks uses the full provider model ID from `model`.
+
+## Local memory and current OpenAI profile
+
+`routes_openai.toml` preserves the deployed OpenAI cloud profiles and explicit
+local passthrough while using native decision-service model discovery for its
+automatic route. Rebuilding the matching binary requires the pinned SGLang
+metadata and decision-model discovery patches in the Dockerfile. Reuse the
+reviewed immutable deployed image for a configuration-only change.
+
+The local client serves `Qwen/Qwen3.8-27B-FP8` at
+`http://qwen38-27b-vllm-l40s-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`
+over Chat Completions. `daedalus/local` defaults to thinking enabled and medium
+effort, preserving ordinary caller precedence. The custom profile retains its
+local nonthinking `none` target; the OpenAI profile keeps `none` cloud-backed.
+
+Both profiles add `daedalus/hindsight-local`, a passthrough to the same local
+model/client with `chat_template_kwargs.enable_thinking=false` as a default and
+no effort or hard budget. It bypasses classifiers and does not fall back to a
+cloud target. Trusted callers keep the normal shallow-merge precedence.
+Hindsight text retain/consolidation/page refresh use this alias while its
+existing main/reflect and legacy image routes remain separate. No new API-key
+names, Services, ports, network policies or client access rules are required.

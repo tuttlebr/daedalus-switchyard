@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := validate
 
 CHART_DIR := charts/switchyard
-ROUTES_FILE ?= routes_fireworks.toml
+ROUTES_FILE ?= routes_custom.toml
 SWITCHYARD_COMMIT := 336196f6fbfc97ddc71c1700f6092e564e9f23c2
 IMAGE_REPOSITORY ?= daedalus.ddns.me:5050/btuttle/switchyard
 IMAGE_TAG ?= v0.3.0
@@ -23,7 +23,7 @@ TEST_ROUTES_FILE := $(ROUTES_FILE)
 ifneq ($(filter test,$(MAKECMDGOALS)),)
 TEST_ROUTE_ARGS := $(filter %.toml,$(MAKECMDGOALS))
 ifneq ($(word 2,$(TEST_ROUTE_ARGS)),)
-$(error Use one TOML file: make test routes_fireworks.toml)
+$(error Use one TOML file: make test routes_custom.toml)
 endif
 ifneq ($(TEST_ROUTE_ARGS),)
 TEST_ROUTES_FILE := $(TEST_ROUTE_ARGS)

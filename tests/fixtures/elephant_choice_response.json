@@ -1,0 +1,22 @@
+{
+  "model": "baselabs/elephant-1",
+  "answers": {
+    "effort": {
+      "type": "choice",
+      "choice": "low",
+      "confidence": 0.995534018492505,
+      "probabilities": {
+        "high": 0.0017514188750128816,
+        "low": 0.9964272147940039,
+        "max": 0.0005177184305630776,
+        "uncertain": 0.0005017899090026683,
+        "xhigh": 0.0008018579914174063
+      },
+      "x_label_mass": 0.9119397892698262
+    }
+  },
+  "usage": {
+    "input_tokens": 890,
+    "output_tokens": 0
+  }
+}

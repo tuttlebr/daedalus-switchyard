@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 CHART_DIR="${PROJECT_DIR}/charts/switchyard"
-ROUTES_FILE="${ROUTES_FILE:-routes_fireworks.toml}"
+ROUTES_FILE="${ROUTES_FILE:-routes_custom.toml}"
 if [[ "${ROUTES_FILE}" != /* ]]; then
   ROUTES_FILE="${PROJECT_DIR}/${ROUTES_FILE}"
 fi

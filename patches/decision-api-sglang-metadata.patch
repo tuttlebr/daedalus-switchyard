@@ -1,0 +1,72 @@
+diff --git a/crates/switchyard-runner/src/decision_api.rs b/crates/switchyard-runner/src/decision_api.rs
+--- a/crates/switchyard-runner/src/decision_api.rs
++++ b/crates/switchyard-runner/src/decision_api.rs
+@@ -276,6 +276,10 @@
+     choice: String,
+     confidence: f64,
+     probabilities: BTreeMap<String, f64>,
++    // SGLang's full-vocabulary label mass is metadata, not a routing probability.
++    // Clef's joint head omits it; the generic scorer used by Elephant includes it.
++    #[serde(default)]
++    x_label_mass: Option<f64>,
+ }
+ 
+ impl DecisionClassifier {
+@@ -471,6 +475,9 @@
+             .iter()
+             .any(|key| !answer.probabilities.contains_key(*key))
+         || !valid_probability(answer.confidence)
++        || answer
++            .x_label_mass
++            .is_some_and(|mass| !valid_probability(mass))
+         || answer
+             .probabilities
+             .values()
+@@ -700,6 +707,39 @@
+     }
+ 
+     #[test]
++    fn sglang_metadata_is_optional_and_does_not_change_choice_probabilities() {
++        let mut value = json!({"type":"choice", "choice":"low", "confidence":0.99,
++            "probabilities":{"low":0.99,"high":0.01}});
++        for mass in [None, Some(0.0), Some(0.2), Some(1.0)] {
++            if let Some(mass) = mass {
++                value["x_label_mass"] = json!(mass);
++            }
++            let answer: ChoiceAnswer = serde_json::from_value(value.clone()).unwrap();
++            assert_eq!(answer.x_label_mass, mass);
++            assert!(validate_answer(&answer, ["low", "high"].into_iter()).is_ok());
++            assert_eq!(answer.probabilities["low"], 0.99);
++        }
++        value["unexpected"] = json!(0.5);
++        assert!(serde_json::from_value::<ChoiceAnswer>(value).is_err());
++    }
++
++    #[test]
++    fn malformed_sglang_metadata_is_rejected() {
++        let mut value = json!({"type":"choice", "choice":"low", "confidence":0.99,
++            "probabilities":{"low":0.99,"high":0.01}});
++        for mass in [json!("0.5"), json!(true), json!({})] {
++            value["x_label_mass"] = mass;
++            assert!(serde_json::from_value::<ChoiceAnswer>(value.clone()).is_err());
++        }
++        value["x_label_mass"] = json!(0.5);
++        let mut answer: ChoiceAnswer = serde_json::from_value(value).unwrap();
++        for mass in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
++            answer.x_label_mass = Some(mass);
++            assert!(validate_answer(&answer, ["low", "high"].into_iter()).is_err());
++        }
++    }
++
++    #[test]
+     fn named_probability_validation_scales_with_the_choice_count() {
+         let probabilities: BTreeMap<String, f64> =
+             (0..18).map(|i| (i.to_string(), 0.0556)).collect();
+@@ -708,6 +748,7 @@
+             choice: "0".into(),
+             confidence: 0.0,
+             probabilities,
++            x_label_mass: None,
+         };
+         assert!(validate_answer(&answer, answer.probabilities.keys().map(String::as_str)).is_ok());
+         assert!(validate_answer(&answer, ["other"].into_iter()).is_err());

@@ -5,6 +5,7 @@ SWITCHYARD_TEST_BINARY=/path/to/switchyard-server python3 -m unittest discover -
 
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -15,6 +16,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from queue import Queue
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import tomllib
@@ -207,7 +209,29 @@ class FireworksChatTransportTest(unittest.TestCase):
         process = None
         try:
             with tempfile.TemporaryDirectory() as directory:
-                source = (ROOT / "routes_fireworks.toml").read_text()
+                source = (ROOT / "routes_custom.toml").read_text()
+                # Pin this existing Clef fixture; automatic model replacement is
+                # covered by the dedicated decision gateway contract tests.
+                source = source.replace('model = "auto"', 'model = "Cloudflare/clef-flash"')
+                # These transport tests exercise the original same-provider
+                # effort contract, independently of editable production maps.
+                for target in ("max", "xhigh", "high", "medium", "low", "instant"):
+                    effort = "low" if target == "instant" else target
+                    fixture_target = (
+                        f'[targets.{target}]\nid = "{target}"\n'
+                        'model = "accounts/fireworks/routers/glm-5p3-fast"\n'
+                        'llm_client = "fireworks"\n'
+                        f'extra_body = {{ reasoning_effort = "{effort}", '
+                        'reasoning_history = "interleaved" }\n\n'
+                    )
+                    source = re.sub(
+                        rf'(?ms)^\[targets\.{target}\]\n.*?(?=^\[|\Z)', fixture_target, source
+                    )
+                source = re.sub(
+                    r'(?ms)^\[routes\.none\]\n.*?(?=^\[|\Z)',
+                    '[routes.none]\nid = "daedalus/none"\ntype = "passthrough"\n'
+                    'target = "low"\ntool_calling = true\nreasoning = true\n\n', source,
+                )
                 config = tomllib.loads(source)
                 if composite is True:
                     # Freeze the earlier two-target contract independently of the current policy.
@@ -309,6 +333,11 @@ class FireworksChatTransportTest(unittest.TestCase):
                 provider_url = config["llm_clients"]["fireworks"]["base_url"]
                 source = source.replace(
                     provider_url, f"http://127.0.0.1:{upstream.server_port}/v1"
+                )
+                # Exercise local selection without contacting the real LAN service.
+                source = source.replace(
+                    config["llm_clients"]["local"]["base_url"],
+                    f"http://127.0.0.1:{upstream.server_port}/v1",
                 )
                 path = Path(directory) / "routes.toml"
                 path.write_text(source)
@@ -1279,6 +1308,81 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(headers["x-model-router-selected-model"], target)
                 captured.get(timeout=5)
                 self.assertTrue(captured.empty())
+
+    def test_explicit_local_preserves_balanced_default_and_caller_effort(self):
+        for stream in (True, False):
+            with (
+                self.subTest(stream=stream),
+                self.router(composite="native_targets") as (url, captured, config),
+            ):
+                self.request(url, model="daedalus/local", stream=stream)
+                _, body, _ = captured.get(timeout=5)
+                self.assertEqual(body["model"], config["targets"]["local"]["model"])
+                self.assertEqual(body["reasoning_effort"], "medium")
+                self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": True})
+                self.assertNotIn("thinking_token_budget", body)
+                self.assertTrue(captured.empty(), "explicit local must bypass the judge")
+                self.request(
+                    url, model="daedalus/local", stream=stream,
+                    reasoning={"effort": "low"},
+                )
+                _, overridden, _ = captured.get(timeout=5)
+                self.assertEqual(overridden["reasoning_effort"], "low")
+                self.assertEqual(overridden["chat_template_kwargs"], {"enable_thinking": True})
+                self.assertTrue(captured.empty())
+
+
+    def test_hindsight_chat_alias_preserves_tools_and_trusted_caller_defaults(self):
+        with self.router(composite="native_targets", judge_status=503) as (url, captured, config):
+            for override in (None, True):
+                body = {
+                    "model": "daedalus/hindsight-local",
+                    "messages": [{"role": "user", "content": "Synthetic text only."}],
+                    "tools": [{"type": "function", "function": {
+                        "name": "recall", "description": "Synthetic recall.",
+                        "parameters": {"type": "object", "properties": {}},
+                    }}],
+                    "tool_choice": "auto", "stream": False, "max_tokens": 128,
+                }
+                if override is not None:
+                    body["chat_template_kwargs"] = {"enable_thinking": override}
+                request = Request(url + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                  headers={"Content-Type": "application/json"})
+                with urlopen(request, timeout=5) as response:
+                    self.assertEqual(response.status, 200)
+                path, actual, _ = captured.get(timeout=5)
+                self.assertEqual(path, "/v1/chat/completions")
+                self.assertEqual(actual["model"], config["targets"]["local"]["model"])
+                self.assertEqual(actual["chat_template_kwargs"], {
+                    "enable_thinking": False if override is None else override,
+                })
+                self.assertEqual(actual["tools"], body["tools"])
+                self.assertEqual(actual["tool_choice"], "auto")
+                self.assertEqual(actual["max_tokens"], 128)
+                self.assertNotIn("reasoning_effort", actual)
+                self.assertNotIn("thinking_token_budget", actual)
+                self.assertTrue(captured.empty(), "passthrough must bypass the classifier")
+
+
+    def test_hindsight_local_failure_does_not_select_another_destination(self):
+        with self.router(composite="native_targets", judge_status=400) as (url, captured, config):
+            request = Request(
+                url + "/v1/chat/completions",
+                data=json.dumps({
+                    "model": "daedalus/hindsight-local",
+                    "messages": [{"role": "user", "content": "Synthetic extraction."}],
+                    "response_format": {"type": "text"},
+                    "stream": False, "max_tokens": 128,
+                }).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with self.assertRaises(HTTPError):
+                urlopen(request, timeout=5)
+            _, actual, _ = captured.get(timeout=5)
+            self.assertEqual(actual["model"], config["targets"]["local"]["model"])
+            self.assertEqual(actual["chat_template_kwargs"], {"enable_thinking": False})
+            self.assertTrue(captured.empty(), "failed local passthrough must not call judge or cloud")
+
 
     def test_named_choice_probability_gate_and_uncertainty_use_capable(self):
         for choice, probability in (

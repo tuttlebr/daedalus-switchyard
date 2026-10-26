@@ -70,17 +70,29 @@ extra_body = { reasoning_effort = "low" }
 
 # ------------------------------------------------------------------------------
 [llm_clients.local]
-format = "openai_responses"
-# Use this model's existing cluster-only HTTP frontend. The shared inference
-# gateway's port 32359 requires TLS, and its certificate does not cover service DNS.
-base_url = "http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
+format = "openai_chat"
+base_url = "http://qwen38-27b-vllm-l40s-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
 api_key_env = "LOCAL_API_KEY"
 
 [targets.local]
 id = "local"
-model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
+model = "Qwen/Qwen3.8-27B-FP8"
 llm_client = "local"
-extra_body = { chat_template_kwargs = { enable_thinking = true } }
+extra_body = { reasoning_effort = "medium", chat_template_kwargs = { enable_thinking = true } }
+
+# Hindsight text extraction and background maintenance stay on one local target.
+# This supplies a nonthinking default; trusted caller fields still take precedence.
+[targets.hindsight_local]
+id = "hindsight_local"
+model = "Qwen/Qwen3.8-27B-FP8"
+llm_client = "local"
+extra_body = { chat_template_kwargs = { enable_thinking = false } }
+
+[targets.none]
+id = "none"
+model = "Qwen/Qwen3.8-27B-FP8"
+llm_client = "local"
+extra_body = { chat_template_kwargs = { enable_thinking = false } }
 # ------------------------------------------------------------------------------
 [routes.stage]
 id = "daedalus"
@@ -271,7 +283,7 @@ reasoning = true
 [routes.none]
 id = "daedalus/none"
 type = "passthrough"
-target = "low"
+target = "none"
 tool_calling = true
 reasoning = true
 
@@ -281,3 +293,11 @@ type = "passthrough"
 target = "local"
 tool_calling = true
 reasoning = true
+
+# Dedicated local destination; no classifier or cloud fallback.
+[routes.hindsight_local]
+id = "daedalus/hindsight-local"
+type = "passthrough"
+target = "hindsight_local"
+tool_calling = true
+reasoning = false

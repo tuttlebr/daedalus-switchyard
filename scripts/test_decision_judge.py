@@ -39,6 +39,18 @@ def endpoint(base: str) -> str:
     return base + ("/systemone" if base.endswith("/v1") else "/v1/systemone")
 
 
+def validate_answer_fields(answer: dict) -> None:
+    """Match the gateway's strict choice schema, including SGLang metadata."""
+    required = {"type", "choice", "confidence", "probabilities"}
+    if not required <= set(answer) or set(answer) - required - {"x_label_mass"}:
+        raise ValueError("Unexpected decision answer fields")
+    mass = answer.get("x_label_mass")
+    if mass is not None and (
+        type(mass) not in (float, int) or not math.isfinite(mass) or not 0 <= mass <= 1
+    ):
+        raise ValueError("Invalid SGLang label mass")
+
+
 def probe(config: dict, base: str, fallback_target: str | None = None) -> list[dict]:
     key_env = config.get("api_key_env")
     headers = {"Content-Type": "application/json"}
@@ -62,8 +74,28 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
     }
     results = []
     for name, prompt in CASES.items():
+        started = time.monotonic()
+        deadline = started + config.get("timeout_ms", 2000) / 1000
+        model = config["model"]
+        if model == "auto":
+            request = Request(endpoint(base).rsplit("/", 1)[0] + "/models", headers=headers)
+            with build_opener(NoRedirect).open(
+                request, timeout=max(0.001, deadline - time.monotonic())
+            ) as response:
+                raw = response.read(65537)
+            if len(raw) > 65536:
+                raise ValueError("Model discovery response exceeds the response budget")
+            models = json.loads(raw)["data"]
+            if not isinstance(models, list) or len(models) != 1:
+                raise ValueError("Automatic discovery requires exactly one served model")
+            model = models[0]["id"]
+            if (
+                not isinstance(model, str) or not model or len(model.encode()) > 512
+                or model.strip() != model or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in model)
+            ):
+                raise ValueError("Invalid discovered model identity")
         payload = {
-            "model": config["model"],
+            "model": model,
             "state": {
                 "client_instructions": [],
                 "messages": [
@@ -76,19 +108,21 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
         body = json.dumps(payload).encode()
         if len(body) > config.get("max_request_bytes", 12000):
             raise ValueError("Synthetic request exceeds the configured input budget")
-        started = time.monotonic()
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Decision deadline exceeded during discovery")
         request = Request(endpoint(base), data=body, headers=headers)
         with build_opener(NoRedirect).open(
-            request, timeout=config.get("timeout_ms", 2000) / 1000
+            request, timeout=deadline - time.monotonic()
         ) as response:
             raw = response.read(65537)
             if len(raw) > 65536:
                 raise ValueError("Decision response exceeds the response budget")
             value = json.loads(raw)
         elapsed_ms = round((time.monotonic() - started) * 1000, 1)
-        if value["model"] != config["model"] or set(value["answers"]) != {"effort"}:
+        if value["model"] != model or set(value["answers"]) != {"effort"}:
             raise ValueError("Unexpected decision model or question")
         answer = value["answers"]["effort"]
+        validate_answer_fields(answer)
         probabilities = answer["probabilities"]
         confidence = answer["confidence"]
         if (
@@ -117,6 +151,7 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
             raise ValueError("Unexpected native usage or potentially truncated input")
         row = {
             "case": name,
+            "model": model,
             "choice": answer["choice"],
             "probabilities": probabilities,
             "elapsed_ms": elapsed_ms,
@@ -145,7 +180,7 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "routes", type=Path, nargs="?", default=Path("routes_fireworks.toml")
+        "routes", type=Path, nargs="?", default=Path("routes_custom.toml")
     )
     parser.add_argument("--route", default="stage", help="TOML route table name")
     parser.add_argument("--base-url", help="Override the target for a port-forward")

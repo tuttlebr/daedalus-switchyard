@@ -1,0 +1,110 @@
+diff --git a/crates/switchyard-runner/src/decision_api.rs b/crates/switchyard-runner/src/decision_api.rs
+--- a/crates/switchyard-runner/src/decision_api.rs
++++ b/crates/switchyard-runner/src/decision_api.rs
+@@ -39,7 +39,7 @@
+ pub struct DecisionClassifierConfig {
+     /// Service root, `/v1`, or full `/v1/systemone` URL.
+     pub base_url: String,
+-    /// Served decision model, independent from the answering tier models.
++    /// Served decision model, or "auto" to discover the service's single loaded model.
+     pub model: String,
+     /// Optional server-owned bearer credential. Caller credentials are never forwarded.
+     #[serde(default)]
+@@ -262,6 +262,14 @@
+     model: String,
+     answers: BTreeMap<String, ChoiceAnswer>,
+     usage: DecisionUsage,
++}
++#[derive(Deserialize)]
++struct DecisionModels {
++    data: Vec<DecisionModel>,
++}
++#[derive(Deserialize)]
++struct DecisionModel {
++    id: String,
+ }
+ #[derive(Deserialize)]
+ struct DecisionUsage {
+@@ -375,12 +383,17 @@
+         Ok(body)
+     }
+ 
+-    async fn verdict(&self, body: Vec<u8>) -> Result<ChoiceAnswer, &'static str> {
+-        let mut request = self
+-            .client
+-            .post(self.endpoint.clone())
+-            .header("content-type", "application/json")
+-            .body(body);
++    // Both discovery and scoring share one deadline and the same bounded,
++    // server-authenticated transport. Never forward caller credentials.
++    async fn send(
++        &self,
++        request: reqwest::RequestBuilder,
++        deadline: Instant,
++    ) -> Result<Vec<u8>, &'static str> {
++        let remaining = deadline
++            .checked_duration_since(Instant::now())
++            .ok_or("timeout")?;
++        let mut request = request.timeout(remaining);
+         if let Some(key) = &self.api_key {
+             request = request.bearer_auth(key);
+         }
+@@ -413,10 +426,56 @@
+             }
+             bytes.extend_from_slice(&chunk);
+         }
++        Ok(bytes)
++    }
++
++    async fn verdict(&self, mut body: Vec<u8>) -> Result<ChoiceAnswer, &'static str> {
++        let deadline = Instant::now() + Duration::from_millis(self.config.timeout_ms);
++        let model = if self.config.model == "auto" {
++            // Resolve on every classification, so a model replacement is picked
++            // up on the next user turn without restarting the gateway. Retained
++            // tool continuations still reuse the original task target.
++            let url = self
++                .endpoint
++                .join("models")
++                .map_err(|_| "model_discovery")?;
++            let bytes = self.send(self.client.get(url), deadline).await?;
++            let models: DecisionModels =
++                serde_json::from_slice(&bytes).map_err(|_| "model_discovery")?;
++            let [model] = models.data.as_slice() else {
++                return Err("model_discovery");
++            };
++            if model.id.is_empty()
++                || model.id.len() > 512
++                || model.id.trim() != model.id
++                || model.id.chars().any(char::is_control)
++            {
++                return Err("model_discovery");
++            }
++            let model = model.id.clone();
++            let mut payload: Value = serde_json::from_slice(&body).map_err(|_| "invalid_input")?;
++            payload["model"] = json!(model);
++            body = serde_json::to_vec(&payload).map_err(|_| "invalid_input")?;
++            if body.len() > self.config.max_request_bytes {
++                return Err("input_too_large");
++            }
++            tracing::info!(event = "decision_api_model_discovered", model = %model);
++            model
++        } else {
++            self.config.model.clone()
++        };
++        let request = self
++            .client
++            .post(self.endpoint.clone())
++            .header("content-type", "application/json")
++            .body(body);
++        let bytes = self.send(request, deadline).await?;
+         let verdict: DecisionResponse =
+             serde_json::from_slice(&bytes).map_err(|_| "invalid_response")?;
+-        if verdict.model != self.config.model
+-            || verdict.answers.len() != 1
++        if verdict.model != model {
++            return Err("model_mismatch");
++        }
++        if verdict.answers.len() != 1
+             || verdict.usage.output_tokens != 0
+             || verdict.usage.input_tokens == 0
+             || verdict.usage.input_tokens >= self.config.max_input_tokens
