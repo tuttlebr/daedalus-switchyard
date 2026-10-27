@@ -1,30 +1,44 @@
 # Local model request pin
 
-The scalar local targets request `Qwen/Qwen3.6-35B-A3B-FP8`. The serving
-artifact is pinned separately to revision
-`95a723d08a9490559dae23d0cff1d9466213d989`; a request model name alone does not
-verify the loaded weights or configuration.
+The fixed `daedalus/local`, `daedalus/none` and `daedalus/hindsight-local`
+routes request `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` through the
+cluster-only Bolt frontend. This is one selected local model for all three
+aliases, including clients configured for image input.
 
-| Route configuration | Targets using this model |
-| --- | --- |
-| `routes_openai.toml` | `local`, `hindsight_local` |
+The serving artifact is pinned separately to revision
+`c6cc2e8ffa353403213d6b9b18aaf8eb684d705a`. A request model name does not verify
+loaded weights, backend configuration, output quality or application benefit.
+Deployment evidence must establish the actual serving artifact.
+
+| Route configuration  | Fixed local targets                |
+| -------------------- | ---------------------------------- |
+| `routes_openai.toml` | `local`, `hindsight_local`, `none` |
 | `routes_custom.toml` | `local`, `hindsight_local`, `none` |
 
-Existing public aliases, local client endpoint, credentials, classifiers and
-other target choices retain their configured behavior. The OpenAI profile's
-`none` route continues to use its existing cloud target. The server retains
-`Qwen/Qwen3.8-27B-FP8` as a compatibility alias, but these scalar targets use the
-actual model name.
+Both profiles use the existing Chat client and `LOCAL_API_KEY` mechanism at
+`http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`.
+The aliases remain fixed passthrough routes without a classifier or cloud
+fallback. The OpenAI profile's `none` alias uses the same local contract as the
+working custom configuration; changing profile files cannot move it to a cloud
+instant model.
 
-The inherited local default `reasoning_effort="medium"` is preserved for request
-compatibility. This pinned Qwen3.6 template does not interpret that field as a
-thinking mode or token budget. Its existing `chat_template_kwargs.enable_thinking`
-default controls thinking: enabled for `local`, disabled for `hindsight_local`
-and the custom profile's `none` target. Trusted caller precedence is unchanged.
+The `local` target enables thinking and requests efficient reasoning with
+`chat_template_kwargs = { enable_thinking = true, medium_effort = true }`. The
+typed Dynamo extension `nvext = { max_thinking_tokens = 256 }` bounds a
+reasoning span within the independent request output limit. It is not an
+aggregate workflow reasoning ceiling. `none` and `hindsight_local` keep their
+nonthinking default and do not force a thinking-token budget. Trusted caller
+fields retain the existing shallow merge precedence.
 
-For a configuration update, merge these model-field changes into the active
-configuration while preserving concurrent route and deployment changes. Do not
-replay a complete older route file over the current configuration. Keep the
-existing endpoint and authentication contracts and verify both public protocol
-paths before applying a separately reviewed deployment. This model pin does not
-establish output quality or an application benefit.
+Merge the declared local destination and target changes into a fresh copy of the
+active configuration. Preserve concurrent cloud, classifier, route, credential
+and deployment changes; do not replay an entire older profile over live state.
+Hindsight may still use `daedalus/none` for background or vision roles while its
+latest owner source names `daedalus/hindsight-local`; both aliases select this
+same local model without changing that owner's configuration.
+
+Retiring a previous inference worker must preserve the existing gateway address,
+NodePort, model-header routes, authentication and supported compatibility IDs.
+Catalogue aliases must identify the actual loaded Bolt checkpoint. Keep caches
+and a rollback configuration; changing these scalar route files does not itself
+retire a worker or verify model-serving compatibility.

@@ -1,9 +1,8 @@
 """Deployment invariants; the built-binary wire tests live alongside these."""
 
+import tomllib
 import unittest
 from pathlib import Path
-
-import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,24 +44,36 @@ class FireworksRoutesTest(unittest.TestCase):
             with self.subTest(profile=name):
                 config = tomllib.loads((ROOT / name).read_text())
                 route = config["routes"]["hindsight_local"]
-                self.assertEqual(route, {
-                    "id": "daedalus/hindsight-local", "type": "passthrough",
-                    "target": "hindsight_local", "tool_calling": True,
-                    "reasoning": False,
-                })
+                self.assertEqual(
+                    route,
+                    {
+                        "id": "daedalus/hindsight-local",
+                        "type": "passthrough",
+                        "target": "hindsight_local",
+                        "tool_calling": True,
+                        "reasoning": False,
+                    },
+                )
                 target = config["targets"][route["target"]]
                 self.assertEqual(target["model"], config["targets"]["local"]["model"])
                 self.assertEqual(target["llm_client"], "local")
-                self.assertEqual(target["extra_body"], {
-                    "chat_template_kwargs": {"enable_thinking": False},
-                })
-                self.assertEqual(config["targets"]["local"]["extra_body"], {
-                    "reasoning_effort": "medium",
-                    "chat_template_kwargs": {"enable_thinking": True},
-                })
-                self.assertEqual(config["routes"]["none"]["target"],
-                                 "instant" if name == "routes_openai.toml" else "none")
-
+                self.assertEqual(
+                    target["extra_body"],
+                    {
+                        "chat_template_kwargs": {"enable_thinking": False},
+                    },
+                )
+                self.assertEqual(
+                    config["targets"]["local"]["extra_body"],
+                    {
+                        "chat_template_kwargs": {
+                            "enable_thinking": True,
+                            "medium_effort": True,
+                        },
+                        "nvext": {"max_thinking_tokens": 256},
+                    },
+                )
+                self.assertEqual(config["routes"]["none"]["target"], "none")
 
     def test_optional_native_credential_is_discovered_for_deployment(self):
         import importlib.util
@@ -84,7 +95,12 @@ class FireworksRoutesTest(unittest.TestCase):
             )
             self.assertEqual(
                 helper.api_key_environment_names(path),
-                ["DECISION_API_KEY", "FIREWORKS_API_KEY", "INCEPTION_API_KEY", "LOCAL_API_KEY"],
+                [
+                    "DECISION_API_KEY",
+                    "FIREWORKS_API_KEY",
+                    "INCEPTION_API_KEY",
+                    "LOCAL_API_KEY",
+                ],
             )
             path.write_text(
                 path.read_text().replace(

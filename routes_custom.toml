@@ -71,26 +71,26 @@ extra_body = { reasoning_effort = "low" }
 # ------------------------------------------------------------------------------
 [llm_clients.local]
 format = "openai_chat"
-base_url = "http://qwen38-27b-vllm-l40s-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
+base_url = "http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
 api_key_env = "LOCAL_API_KEY"
 
 [targets.local]
 id = "local"
-model = "Qwen/Qwen3.6-35B-A3B-FP8"
+model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 llm_client = "local"
-extra_body = { reasoning_effort = "medium", chat_template_kwargs = { enable_thinking = true } }
+extra_body = { chat_template_kwargs = { enable_thinking = true, medium_effort = true }, nvext = { max_thinking_tokens = 256 } }
 
 # Hindsight text extraction and background maintenance stay on one local target.
 # This supplies a nonthinking default; trusted caller fields still take precedence.
 [targets.hindsight_local]
 id = "hindsight_local"
-model = "Qwen/Qwen3.6-35B-A3B-FP8"
+model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 llm_client = "local"
 extra_body = { chat_template_kwargs = { enable_thinking = false } }
 
 [targets.none]
 id = "none"
-model = "Qwen/Qwen3.6-35B-A3B-FP8"
+model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 llm_client = "local"
 extra_body = { chat_template_kwargs = { enable_thinking = false } }
 # ------------------------------------------------------------------------------

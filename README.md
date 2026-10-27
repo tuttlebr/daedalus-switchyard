@@ -66,16 +66,17 @@ Chat Completions completed, so this upstream transport is intentional.
 | `daedalus/high` | `high` | `high` | Fixed high effort |
 | `daedalus/medium` | `medium` | `medium` | Fixed requested medium effort |
 | `daedalus/low` | `low` | `low` | Explicit latency-oriented choice |
-| `daedalus/none` | `none` | N/A | Custom profile: local nonthinking default; OpenAI profile: cloud instant alias |
-| `daedalus/local` | `local` | N/A | `Qwen/Qwen3.8-27B-FP8` on local Dynamo / L40S |
+| `daedalus/none` | `none` | N/A | Both local-containing profiles: fixed Bolt nonthinking default |
+| `daedalus/local` | `local` | N/A | `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` on local Dynamo / GB10 |
+| `daedalus/hindsight-local` | `hindsight_local` | N/A | Same local Bolt model; nonthinking default |
 
 The effort column describes the value sent on the wire. Live GLM probes accepted
 `low`, `medium`, `high`, `xhigh`, and `max` on October 6, 2026; that does not prove
 five distinct internal compute tiers. The provider explicitly rejected `none`
-because GLM 5.3 is thinking-only. `/none` is provider-specific: the custom profile
-uses its local nonthinking target, and the OpenAI profile uses its cloud instant
-target. Neither sends `reasoning_effort="none"` to GLM. Use the dedicated
-`daedalus/hindsight-local` alias when Hindsight text maintenance must stay local.
+because GLM 5.3 is thinking-only. In the OpenAI and custom configurations, `/none`
+and `/hindsight-local` are fixed local Bolt aliases with nonthinking defaults.
+They bypass the classifier and cloud fallback. Caller fields retain their
+existing shallow override precedence.
 
 Daedalus selects profiles before Switchyard selects targets. Explicit request
 profiles take precedence. With automatic selection, daily-summary requests
@@ -505,13 +506,23 @@ Switchyard container. It does not place credential values in Helm values or the
 ConfigMap.
 
 Before changing the release, the deployment capability gate probes every target.
-`routes_custom.toml` uses the existing cluster-only Dynamo frontend at
-`http://qwen38-27b-vllm-l40s-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`
-for its local model. Switchyard reaches this Service through Kubernetes DNS;
-the capability gate uses a temporary localhost `kubectl port-forward` in the
-selected Kubernetes context. This direct path is tied to the Bolt deployment
-and bypasses the shared gateway; it retains the configured `LOCAL_API_KEY` header,
-but the frontend does not enforce the gateway's authentication policy.
+Both local-containing configurations use the existing cluster-only Bolt
+frontend:
+`http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`.
+Switchyard reaches it through Kubernetes DNS and retains `LOCAL_API_KEY`. This
+direct frontend path uses the local model without the shared gateway's separate
+authentication policy.
+
+The three fixed local aliases request
+`nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB`. `local` enables thinking and
+efficient reasoning with `chat_template_kwargs.enable_thinking=true` and
+`medium_effort=true`; its typed Dynamo `nvext.max_thinking_tokens=256` controls
+a reasoning span within the existing output cap. `none` and `hindsight_local`
+disable thinking by default and do not force a thinking budget. Caller fields
+retain the existing shallow override precedence. See the
+[local model pin](docs/local-model-pin.md) for the exact artifact revision and
+compatibility boundaries. Route configuration alone establishes neither model
+quality nor a measured latency benefit.
 
 The shared inference gateway on port 32359 accepts HTTPS and presents a
 certificate for `daedalus.ddns.me`. Sending HTTP to that port produces
@@ -602,16 +613,12 @@ automatic route. Rebuilding the matching binary requires the pinned SGLang
 metadata and decision-model discovery patches in the Dockerfile. Reuse the
 reviewed immutable deployed image for a configuration-only change.
 
-The local client serves `Qwen/Qwen3.8-27B-FP8` at
-`http://qwen38-27b-vllm-l40s-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`
-over Chat Completions. `daedalus/local` defaults to thinking enabled and medium
-effort, preserving ordinary caller precedence. The custom profile retains its
-local nonthinking `none` target; the OpenAI profile keeps `none` cloud-backed.
-
-Both profiles add `daedalus/hindsight-local`, a passthrough to the same local
-model/client with `chat_template_kwargs.enable_thinking=false` as a default and
-no effort or hard budget. It bypasses classifiers and does not fall back to a
-cloud target. Trusted callers keep the normal shallow-merge precedence.
-Hindsight text retain/consolidation/page refresh use this alias while its
-existing main/reflect and legacy image routes remain separate. No new API-key
-names, Services, ports, network policies or client access rules are required.
+The fixed local client requests
+`nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` over Chat Completions at the Bolt
+frontend. `daedalus/local` enables thinking and efficient reasoning with the
+verified Dynamo controls described in the [local model pin](docs/local-model-pin.md).
+Both profiles keep `/none` and `/hindsight-local` on this same model with thinking
+disabled by default and no forced budget. Hindsight role configuration remains
+owned separately; these aliases preserve its main, background and image paths.
+No new API-key names, Services, ports, network policies or client access rules
+are required for the scalar route update.
