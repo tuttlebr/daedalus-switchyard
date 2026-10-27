@@ -76,7 +76,7 @@ api_key_env = "LOCAL_API_KEY"
 
 [targets.local]
 id = "local"
-model = "Qwen/Qwen3.8-27B-FP8"
+model = "Qwen/Qwen3.6-35B-A3B-FP8"
 llm_client = "local"
 extra_body = { reasoning_effort = "medium", chat_template_kwargs = { enable_thinking = true } }
 
@@ -84,13 +84,13 @@ extra_body = { reasoning_effort = "medium", chat_template_kwargs = { enable_thin
 # This supplies a nonthinking default; trusted caller fields still take precedence.
 [targets.hindsight_local]
 id = "hindsight_local"
-model = "Qwen/Qwen3.8-27B-FP8"
+model = "Qwen/Qwen3.6-35B-A3B-FP8"
 llm_client = "local"
 extra_body = { chat_template_kwargs = { enable_thinking = false } }
 
 [targets.none]
 id = "none"
-model = "Qwen/Qwen3.8-27B-FP8"
+model = "Qwen/Qwen3.6-35B-A3B-FP8"
 llm_client = "local"
 extra_body = { chat_template_kwargs = { enable_thinking = false } }
 # ------------------------------------------------------------------------------
