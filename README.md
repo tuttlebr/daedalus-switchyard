@@ -16,12 +16,20 @@ It deploys a non-root Helm workload in the `daedalus` namespace. The Fireworks c
 exposes model `daedalus` on the OpenAI Chat Completions, OpenAI Responses, and
 Anthropic Messages endpoints.
 
-`routes_custom.toml` implements Composite routing for automatic effort and
-exposes explicit effort routes. All Fireworks effort targets use the configured
-provider model; the routing policy describes task requirements independently of
-that model's name. `routes_coreweave.toml` uses the same automatic routing policy
-with its own provider settings. The `/local` route is a separate, explicitly
-requested Dynamo model.
+`routes_custom.toml` and `routes_openai.toml` expose `daedalus` with automatic
+selection of `max`, `xhigh`, `high`, `medium`, `low`, `instant`, and `local`.
+Sensitive work (including reading, summarizing, or replying to email) prefers
+`local` before considering difficulty. Greetings and simple social exchanges
+use `instant`; routine synthesis uses `medium`. The custom configuration uses
+Fireworks, Inception and local Dynamo; the OpenAI configuration uses OpenAI and
+the same local Bolt endpoint. Both retain explicit `daedalus/<profile>` routes.
+
+This is a classifier preference, not a local-only privacy guarantee: the local
+decision service receives classification context, and stage recovery or provider
+failure can still choose the cloud `capable_target`. Clients requiring local-only
+answering should request `daedalus/local`, which bypasses the classifier and
+Composite fallback. Automatic policy changes take effect when the updated route
+file is deployed; they do not alter the provider models or effort defaults.
 
 `routes_inception.toml` uses Inception Labs' `mercury-3` through its
 [OpenAI-compatible Chat Completions API](https://docs.inceptionlabs.ai/get-started)
@@ -45,11 +53,12 @@ the existing Makefile discovers `make deploy-route_inception` automatically.
 ```mermaid
 flowchart LR
   A[Daedalus Rust agent] -->|Responses API| B[Switchyard]
-  B -->|daedalus: judge + stage| C[low, high, xhigh or max effort]
+  B -->|daedalus: judge + stage| C[max, xhigh, high, medium, low, instant or local]
   B -->|deep / xhigh / max / other explicit route| D[fixed effort target]
-  C --> E[Fireworks: Chat Completions]
+  C --> E[Configured cloud provider]
+  C --> F[Local Dynamo: Chat Completions]
   D --> E
-  B -->|daedalus/local| F[Local Dynamo: Chat Completions]
+  B -->|daedalus/local| F
 ```
 
 Switchyard translates Responses input, tool calls/results, reasoning history,
@@ -60,23 +69,30 @@ Chat Completions completed, so this upstream transport is intentional.
 
 | Requested model | Switchyard target | Requested Fireworks effort | Use |
 | --- | --- | --- | --- |
-| `daedalus` | Native Composite choices: `low`, `high`, `xhigh`, `max` | Selected target's effort | Automatic/default profile |
+| `daedalus` | Native Composite choices: `max`, `xhigh`, `high`, `medium`, `low`, `instant`, `local` | Selected target's effort | Automatic/default profile |
 | `daedalus/deep`, `daedalus/xhigh` | `xhigh` | `xhigh` | Deep profile; daily summaries and mapped skills |
 | `daedalus/max` | `max` | `max` | Explicit `deep_max` profile |
 | `daedalus/high` | `high` | `high` | Fixed high effort |
 | `daedalus/medium` | `medium` | `medium` | Fixed requested medium effort |
 | `daedalus/low` | `low` | `low` | Explicit latency-oriented choice |
-| `daedalus/none` | `none` | N/A | Both local-containing profiles: fixed Bolt nonthinking default |
+| `daedalus/none` | `none` | N/A | Fixed local Bolt model; nonthinking default |
 | `daedalus/local` | `local` | N/A | `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` on local Dynamo / GB10 |
-| `daedalus/hindsight-local` | `hindsight_local` | N/A | Same local Bolt model; nonthinking default |
+| `daedalus/hindsight-local` | `hindsight_local` | N/A | Same local model; nonthinking default for Hindsight text maintenance |
+
+`daedalus/hindsight-local` exists in both OpenAI and custom profiles and always
+uses the local passthrough destination. Its target defaults
+`chat_template_kwargs.enable_thinking` to `false`, with no effort or hard
+thinking budget. Caller fields retain the normal shallow-merge precedence.
+Hindsight roles configured with `/none` use the same nonthinking local model;
+main/reflect clients can retain `daedalus/local`. This route change preserves
+the owner's existing role selections, including image clients.
 
 The effort column describes the value sent on the wire. Live GLM probes accepted
-`low`, `medium`, `high`, `xhigh`, and `max` on October 6, 2026; that does not prove
-five distinct internal compute tiers. The provider explicitly rejected `none`
-because GLM 5.3 is thinking-only. In the OpenAI and custom configurations, `/none`
-and `/hindsight-local` are fixed local Bolt aliases with nonthinking defaults.
-They bypass the classifier and cloud fallback. Caller fields retain their
-existing shallow override precedence.
+`low`, `medium`, `high`, `xhigh`, and `max` on October 6, 2026; that does not
+prove five distinct internal compute tiers. The provider explicitly rejected
+`none` because GLM 5.3 is thinking-only. Cloud targets preserve reasoning
+between tool calls within the current user turn. They do not send
+`reasoning_effort="none"` or discard in-turn reasoning.
 
 Daedalus selects profiles before Switchyard selects targets. Explicit request
 profiles take precedence. With automatic selection, daily-summary requests
@@ -198,29 +214,72 @@ before applying these target defaults.
 
 ## Automatic reasoning routing
 
-`routes_custom.toml` uses Composite routing for `daedalus` with a native
-Cloudflare Clef-Flash decision classifier. It targets the service configured in
+The current deployment uses `routes_openai.toml`. Both it and `routes_custom.toml`
+set the native SystemOne classifier's `model = "auto"`: on each classification,
+Switchyard reads the decision service's `/v1/models` and uses its single served
+model, currently `baselabs/elephant-1`. Replacing the decision model, including
+switching back to Clef-Flash, takes effect on the next user turn without a
+Switchyard redeployment. Existing tool continuations retain their task target.
+Explicit effort routes bypass discovery and classification. Discovery and scoring
+share the configured two-second deadline, response size limits and service-owned
+authentication. Empty, ambiguous or malformed model lists and a decision response
+whose model differs from the discovered identity use the capable fallback. An
+explicit model ID still pins that model and skips discovery.
+
+`patches/decision-api-model-discovery.patch` implements this behavior. It prevents
+the stale Clef-Flash configuration that rejected valid Elephant decisions as
+`invalid_response` and sent all automatic requests to max on October 26, 2026.
+
+The automatic choices remain `low`, `high`,
+`xhigh`, and `max`. SGLang returns optional `x_label_mass` metadata for Elephant;
+the gateway validates it as a finite value in `[0, 1]` and uses the option
+probabilities for routing. Clef responses without that field remain supported.
+Unknown answer fields and invalid model, question, usage, or probability data
+still trigger the capable fallback. Elephant uses SGLang's generic label scorer;
+the Clef joint-head details below describe the earlier model.
+
+`patches/decision-api-sglang-metadata.patch` adds this compatibility to the built
+gateway. The image build runs its Rust contract tests. The captured synthetic
+Elephant response in `tests/fixtures/elephant_choice_response.json` also exercises
+actual Chat Completions and Responses routing through the release binary:
+
+```bash
+SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
+  python3 -m unittest discover -s tests -p test_decision_api.py -v
+python3 scripts/test_decision_judge.py routes_openai.toml \
+  --base-url http://127.0.0.1:30090/v1
+```
+
+The standalone probe validates the service contract; the binary tests also
+verify target selection, session reuse, explicit bypass, and fallback behavior.
+
+The original `routes_custom.toml` configuration used Composite routing for
+`daedalus` with Cloudflare Clef-Flash. Both models use the service configured in
 `../decision-api`:
 
 ```text
 http://decision-api.daedalus.svc.cluster.local:30000/v1/systemone
-model: Cloudflare/clef-flash
+current model: baselabs/elephant-1
 ```
 
 The classifier sends SystemOne `state` and one typed `choice` question named
 `effort`, with configurable named target choices and an `uncertain` option.
-Both Fireworks and CoreWeave use the choices `low`, `high`, `xhigh`, and `max`.
+Both current route files use `max`, `xhigh`, `high`, `medium`, `low`, `instant`,
+and `local`. Privacy-sensitive work takes priority over difficulty; greetings
+use instant, mechanical work low, short summaries/explanations medium, and
+work with multiple dependent steps high.
 It uses the model's native joint head without a
 Chat endpoint, generated verdict, free-text `crux`, or artificial `p_solve`.
 A winning named choice must meet its own `min_probability` threshold to set the
-task target: **0.90** for low and high, **0.55** for xhigh, and **0.00** for max.
-Max needs no acceptance gate because it is also the fallback. Uncertainty,
-insufficient probability and judge failures use `stage.capable_target`, currently
-max. Daily summaries, substantive code work and complete well-formatted HTML pages
-require at least xhigh; exceptional complexity, difficult recovery and consequential
-decisions require max. The policy applies to the entire deliverable, including
-final synthesis, rendering and validation. These criteria and thresholds are
-starting policies, not calibrated task-success rates.
+task target: **0.90** for instant, low, medium and high; **0.55** for xhigh;
+and **0.00** for max and local. A winning local choice has no probability gate,
+so it is not rejected in favor of a cloud target solely for low probability.
+Uncertainty, insufficient probability and judge failures use
+`stage.capable_target`: currently max in custom and xhigh in OpenAI.
+For non-sensitive work, daily summaries, substantive code and complete HTML
+pages require at least xhigh; exceptional complexity requires max. Sensitive
+work prefers local regardless of complexity, including an email-based briefing.
+These criteria and thresholds are starting policies, not calibrated accuracy.
 The stage router still applies tool evidence, critical-error escalation and
 recovery holds. Its existing confidence threshold remains 0.5.
 
@@ -236,9 +295,9 @@ criteria = "Routine bounded synthesis or a short dependent tool sequence."
 Replace or extend the choice tables to use more configurations or different models.
 Labels need not match target names. `uncertain` is reserved and uses
 `uncertain_criteria`; every target must exist in `[targets]`. Choose a capable
-target suitable for recovery across the entire choice pool. The automatic pool
-includes max; local remains explicit. Fireworks also retains an explicit medium
-target and route. CoreWeave's medium route aliases high.
+target suitable for recovery across the entire choice pool. All seven profiles
+are available automatically and explicitly. The local profile uses the existing
+Dynamo service in both files; OpenAI deployments now also need `LOCAL_API_KEY`.
 
 The selected task target is retained through tool continuations. Healthy production
 signals return to that target, including xhigh, rather than dropping to the fixed
@@ -506,12 +565,14 @@ Switchyard container. It does not place credential values in Helm values or the
 ConfigMap.
 
 Before changing the release, the deployment capability gate probes every target.
-Both local-containing configurations use the existing cluster-only Bolt
-frontend:
-`http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`.
-Switchyard reaches it through Kubernetes DNS and retains `LOCAL_API_KEY`. This
-direct frontend path uses the local model without the shared gateway's separate
-authentication policy.
+Both local-containing configurations use the shared Dynamo gateway's internal
+service:
+`http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1`.
+Switchyard reaches it through Kubernetes DNS and authenticates with
+`LOCAL_API_KEY`, which must be accepted by the gateway. Set a local target's
+`model` to any ID advertised by the gateway's `/v1/models` catalog; changing
+models does not require changing `llm_clients.local.base_url`. Keep each
+target's `extra_body` compatible with the selected model.
 
 The three fixed local aliases request
 `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB`. `local` enables thinking and
@@ -524,12 +585,11 @@ retain the existing shallow override precedence. See the
 compatibility boundaries. Route configuration alone establishes neither model
 quality nor a measured latency benefit.
 
-The shared inference gateway on port 32359 accepts HTTPS and presents a
-certificate for `daedalus.ddns.me`. Sending HTTP to that port produces
-`BadStatusLine`; changing only the scheme on a `*.svc.cluster.local` URL also
-fails because the certificate does not cover that name (the capability gate
-currently rejects cluster-local HTTPS). Other route variants still referencing
-the gateway's HTTP URL need a compatible endpoint before deployment.
+The gateway's separate LAN endpoint on port 32359 accepts HTTPS. Cluster
+clients use the authenticated internal HTTP listener on port 8000 through its
+ClusterIP service, avoiding external DNS and TLS hostname mismatches. The
+gateway's durable configuration is maintained in `../daedalus-dynamo`; its
+public Service exposes only the existing HTTPS port.
 
 The script fixes the namespace to `daedalus`, release name to `switchyard`, and
 Secret name to `switchyard-api-key` by default. Override `RELEASE_NAME` or
@@ -613,21 +673,3 @@ Routed responses include `x-model-router-selected-model` and, when available,
 `x-model-router-rationale`. With the Fireworks aliases, the selected-model
 header identifies the target, such as `high`, `low`, or `xhigh`; the request sent
 to Fireworks uses the full provider model ID from `model`.
-
-## Local memory and current OpenAI profile
-
-`routes_openai.toml` preserves the deployed OpenAI cloud profiles and explicit
-local passthrough while using native decision-service model discovery for its
-automatic route. Rebuilding the matching binary requires the pinned SGLang
-metadata and decision-model discovery patches in the Dockerfile. Reuse the
-reviewed immutable deployed image for a configuration-only change.
-
-The fixed local client requests
-`nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` over Chat Completions at the Bolt
-frontend. `daedalus/local` enables thinking and efficient reasoning with the
-verified Dynamo controls described in the [local model pin](docs/local-model-pin.md).
-Both profiles keep `/none` and `/hindsight-local` on this same model with thinking
-disabled by default and no forced budget. Hindsight role configuration remains
-owned separately; these aliases preserve its main, background and image paths.
-No new API-key names, Services, ports, network policies or client access rules
-are required for the scalar route update.

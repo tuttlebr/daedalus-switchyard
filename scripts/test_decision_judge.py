@@ -19,6 +19,13 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import tomllib
 
 CASES = {
+    "greeting": "Hello! How are you?",
+    "email": "Read my unread email and summarize the messages that need a reply.",
+    "private_briefing": "Prepare my morning briefing using my private email and medical appointment messages.",
+    "medium": "Explain this supplied Python expression in a short paragraph: sorted(set([3, 1, 3])).",
+    "medium_summary": "Summarize this public park notice in two plain-language sentences: The north trail will close for maintenance on Monday and Tuesday. The south trail and picnic area remain open. Visitors should use the east parking lot while crews repair the north footbridge.",
+    "high": "Research the public documentation for SQLite and PostgreSQL, compare their concurrency and deployment tradeoffs, and recommend one for a small multi-user hobby app. Cite sources.",
+    "xhigh": "Implement a responsive HTML page with semantic structure, accessible navigation, a mobile layout and a contact form, then validate the finished page.",
     "simple": "What is 7 + 9? Return only the integer.",
     "proof": "Prove a necessary and sufficient convergence criterion for a non-normal matrix iteration under time-varying perturbations; include a rigorous counterexample to a weaker criterion.",
     "operations": "Plan a production Kubernetes storage migration preserving PVCs, with concurrent writers, corruption checks, verification gates and rollback.",

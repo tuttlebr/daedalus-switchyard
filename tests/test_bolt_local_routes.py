@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ("routes_openai.toml", "routes_custom.toml")
 ALIASES = ("daedalus/local", "daedalus/none", "daedalus/hindsight-local")
 BOLT_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
-BOLT_URL = (
-    "http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
+GATEWAY_URL = (
+    "http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1"
 )
 
 
@@ -26,7 +26,7 @@ def resolved(config, alias):
 
 
 class BoltLocalRoutesTest(unittest.TestCase):
-    def test_all_local_aliases_use_one_bolt_destination_in_both_profiles(self):
+    def test_all_local_aliases_send_bolt_requests_to_shared_gateway_in_both_profiles(self):
         for profile in PROFILES:
             config = tomllib.loads((ROOT / profile).read_text())
             for alias in ALIASES:
@@ -36,7 +36,7 @@ class BoltLocalRoutesTest(unittest.TestCase):
                     self.assertNotIn("capable_target", route)
                     self.assertEqual(target["model"], BOLT_MODEL)
                     self.assertEqual(target["llm_client"], "local")
-                    self.assertEqual(client["base_url"], BOLT_URL)
+                    self.assertEqual(client["base_url"], GATEWAY_URL)
                     self.assertEqual(client["format"], "openai_chat")
                     self.assertEqual(client["api_key_env"], "LOCAL_API_KEY")
 
@@ -74,7 +74,7 @@ class BoltLocalRoutesTest(unittest.TestCase):
         route, target, client = resolved(config, "daedalus/none")
         self.assertEqual(route["target"], "none")
         self.assertEqual(target["model"], BOLT_MODEL)
-        self.assertEqual(client["base_url"], BOLT_URL)
+        self.assertEqual(client["base_url"], GATEWAY_URL)
 
 
 @unittest.skipUnless(

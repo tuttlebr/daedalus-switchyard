@@ -2,7 +2,7 @@
 
 The fixed `daedalus/local`, `daedalus/none` and `daedalus/hindsight-local`
 routes request `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` through the
-cluster-only Bolt frontend. This is one selected local model for all three
+shared Dynamo gateway. This is one selected local model for all three
 aliases, including clients configured for image input.
 
 The serving artifact is pinned separately to revision
@@ -16,7 +16,10 @@ Deployment evidence must establish the actual serving artifact.
 | `routes_custom.toml` | `local`, `hindsight_local`, `none` |
 
 Both profiles use the existing Chat client and `LOCAL_API_KEY` mechanism at
-`http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1`.
+`http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1`.
+The gateway requires a valid `LOCAL_API_KEY` and routes by the target's `model`
+field. A different local model can be selected using its advertised `/v1/models`
+ID without changing the client URL; update model-specific options accordingly.
 The aliases remain fixed passthrough routes without a classifier or cloud
 fallback. The OpenAI profile's `none` alias uses the same local contract as the
 working custom configuration; changing profile files cannot move it to a cloud

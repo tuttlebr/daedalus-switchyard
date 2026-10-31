@@ -1249,7 +1249,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                     "http://"
                     + {k.lower(): v for k, v in native_headers.items()}["host"],
                 )
-            self.assertEqual(len(results), 4)
+            self.assertEqual(len(results), len(probe.CASES))
             for _ in results:
                 path, request, _ = captured.get(timeout=5)
                 self.assertEqual(path, "/v1/systemone")
@@ -1269,8 +1269,9 @@ class FireworksChatTransportTest(unittest.TestCase):
 
     @staticmethod
     def target_verdict(choice, probability=0.96):
-        options = ("low", "high", "xhigh", "max", "uncertain")
-        probabilities = {name: (1 - probability) / 4 for name in options}
+        config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
+        options = (*config["routes"]["stage"]["classifier"]["choices"], "uncertain")
+        probabilities = {name: (1 - probability) / (len(options) - 1) for name in options}
         probabilities[choice] = probability
         return {
             "model": "Cloudflare/clef-flash",
@@ -1285,8 +1286,8 @@ class FireworksChatTransportTest(unittest.TestCase):
             "usage": {"input_tokens": 123, "output_tokens": 0},
         }
 
-    def test_named_choices_select_four_targets_and_retain_them(self):
-        for target in ("low", "high", "xhigh", "max"):
+    def test_named_choices_select_seven_targets_and_retain_them(self):
+        for target in ("max", "xhigh", "high", "medium", "low", "instant", "local"):
             with (
                 self.subTest(target=target),
                 self.router(
@@ -1299,15 +1300,26 @@ class FireworksChatTransportTest(unittest.TestCase):
                 _, judge, _ = captured.get(timeout=5)
                 self.assertEqual(
                     set(judge["questions"]["effort"]["criteria"]),
-                    {"low", "high", "xhigh", "max", "uncertain"},
+                    {"max", "xhigh", "high", "medium", "low", "instant", "local", "uncertain"},
                 )
                 _, body, _ = captured.get(timeout=5)
                 self.assertEqual(body["model"], config["targets"][target]["model"])
-                self.assertEqual(body["reasoning_effort"], target)
+                for key, value in config["targets"][target]["extra_body"].items():
+                    self.assertEqual(body[key], value)
                 headers = self.request(url, headers=session, input=self.continuation())
                 self.assertEqual(headers["x-model-router-selected-model"], target)
                 captured.get(timeout=5)
                 self.assertTrue(captured.empty())
+
+    def test_winning_local_choice_has_no_probability_gate(self):
+        with self.router(
+            composite="native_targets", verdict=self.target_verdict("local", 0.4)
+        ) as (url, captured, config):
+            headers = self.request(url)
+            self.assertEqual(headers["x-model-router-selected-model"], "local")
+            captured.get(timeout=5)
+            _, body, _ = captured.get(timeout=5)
+            self.assertEqual(body["model"], config["targets"]["local"]["model"])
 
     def test_explicit_local_preserves_balanced_default_and_caller_effort(self):
         for stream in (True, False):
@@ -1330,7 +1342,6 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(overridden["reasoning_effort"], "low")
                 self.assertEqual(overridden["chat_template_kwargs"], {"enable_thinking": True})
                 self.assertTrue(captured.empty())
-
 
     def test_hindsight_chat_alias_preserves_tools_and_trusted_caller_defaults(self):
         with self.router(composite="native_targets", judge_status=503) as (url, captured, config):
@@ -1363,7 +1374,6 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertNotIn("thinking_token_budget", actual)
                 self.assertTrue(captured.empty(), "passthrough must bypass the classifier")
 
-
     def test_hindsight_local_failure_does_not_select_another_destination(self):
         with self.router(composite="native_targets", judge_status=400) as (url, captured, config):
             request = Request(
@@ -1383,10 +1393,11 @@ class FireworksChatTransportTest(unittest.TestCase):
             self.assertEqual(actual["chat_template_kwargs"], {"enable_thinking": False})
             self.assertTrue(captured.empty(), "failed local passthrough must not call judge or cloud")
 
-
     def test_named_choice_probability_gate_and_uncertainty_use_capable(self):
         for choice, probability in (
+            ("instant", 0.89),
             ("low", 0.89),
+            ("medium", 0.89),
             ("high", 0.89),
             ("xhigh", 0.54),
             ("uncertain", 0.96),

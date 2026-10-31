@@ -73,7 +73,8 @@ extra_body = { reasoning = { effort = "medium" } }
 # ------------------------------------------------------------------------------
 [llm_clients.local]
 format = "openai_chat"
-base_url = "http://nemotron35bolt-vllm-gb10-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
+# Shared Dynamo gateway: target.model selects an ID advertised by /v1/models.
+base_url = "http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1"
 api_key_env = "LOCAL_API_KEY"
 
 [targets.local]
