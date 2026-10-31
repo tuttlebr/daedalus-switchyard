@@ -110,6 +110,25 @@ class Ownership(unittest.TestCase):
 
 
 class Preparation(unittest.TestCase):
+    def test_missing_source_filter_stops_before_release_or_secret_mutations(self):
+        desired = policy()
+        desired["spec"]["ingress"] = [{"fromEntities": ["world"]}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "manifest.yaml"
+            manifest.write_text("fixture")
+            args = state.argparse.Namespace(manifest=manifest)
+            for value in ("false", ""):
+                with self.subTest(value=value), patch.object(
+                    state, "manifest_objects", return_value=[desired]
+                ), patch.object(state, "command", return_value=value) as command:
+                    with self.assertRaisesRegex(ValueError, "bpf.lbSourceRangeAllTypes"):
+                        state.prepare(args)
+                    command.assert_called_once_with(
+                        "kubectl", "--namespace", "kube-system", "get", "configmap", "cilium-config",
+                        "--output=jsonpath={.data.bpf-lb-source-range-all-types}",
+                    )
+
     def test_backup_and_recovery_chart_precede_adoption(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -130,11 +149,14 @@ class Preparation(unittest.TestCase):
                          "loadBalancerSourceRanges": ["192.168.1.0/24"]},
             }
             objects = [policy(), service]
+            objects[0]["spec"]["ingress"].append({"fromEntities": ["world"]})
             live = {state.identity(obj): deepcopy(obj) for obj in objects}
             live[state.identity(objects[0])]["metadata"]["resourceVersion"] = "123"
             patches = []
 
             def run(*argv, **kwargs):
+                if "cilium-config" in argv:
+                    return "true"
                 if argv[:2] == ("helm", "list"):
                     return '[{"status":"deployed"}]'
                 if argv[:3] == ("helm", "get", "manifest"):
@@ -169,6 +191,37 @@ class Preparation(unittest.TestCase):
         for output in ("\n".join(map(json.dumps, objects)), json.dumps({"kind": "List", "items": objects})):
             with self.subTest(output=output), patch.object(state, "command", return_value=output):
                 self.assertEqual(state.manifest_objects("fixture"), objects)
+
+
+@unittest.skipUnless(shutil.which("helm"), "requires Helm")
+class NetworkPolicyChart(unittest.TestCase):
+    def render(self, *overrides):
+        return subprocess.run(
+            ["helm", "template", "switchyard", str(ROOT / "charts/switchyard"),
+             "--namespace", "daedalus", "--show-only", "templates/networkpolicy.yaml", *overrides],
+            capture_output=True, text=True, timeout=15,
+        )
+
+    def test_forwarding_rejects_services_without_an_allow_list(self):
+        for overrides in (
+            ["--set", "service.type=NodePort"],
+            ["--set-json", "service.loadBalancerSourceRanges=[]"],
+            ["--set-json", 'service.annotations={"service.cilium.io/src-ranges-policy":"deny"}'],
+        ):
+            with self.subTest(overrides=overrides):
+                result = self.render(*overrides)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("filter LAN clients before SNAT", result.stderr)
+
+    def test_default_and_internal_only_configurations_render(self):
+        for overrides in (
+            [],
+            ["--set", "service.type=ClusterIP"],
+            ["--set", "service.type=NodePort", "--set", "networkPolicy.allowNodePortSNAT=false"],
+        ):
+            with self.subTest(overrides=overrides):
+                result = self.render(*overrides)
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class DeployShell(unittest.TestCase):

@@ -582,9 +582,18 @@ The Service uses `LoadBalancer` with the unhandled
 `daedalus.ai/nodeport-only` class to retain a fixed NodePort without allocating
 a separate VIP. Cilium's `bpf.lbSourceRangeAllTypes=true` setting applies
 `service.loadBalancerSourceRanges` before cross-node SNAT. The accompanying
-policy permits node forwarding on port `4000`; it does not grant unrelated
-pods access. Keep the source-range filter enabled when changing these policies.
+policy permits forwarding on port `4000`, including Cilium's `world` identity:
+external connections retain that identity after cross-node SNAT, even though
+their source address becomes a node address. The Service still restricts the
+original client to `192.168.1.0/24`, and unrelated pods receive no new grant.
+The chart requires an allow-list of source ranges for this forwarding policy;
+deployment verifies that Cilium's source-range filter is enabled.
 If node CiliumInternalIPs change, refresh `networkPolicy.nodeSourceCIDRs`.
+
+Verify LAN access from a non-node device, such as `daedalus-07`
+(`192.168.1.240`), using `/health`, `/v1/models`, and a generation request.
+Include `192.168.1.234:30260` when the Switchyard pod is on another node:
+node-local checks alone do not exercise the external forwarding policy.
 
 Switchyard's caller interface keeps its existing HTTP contract without adding
 a new bearer-key requirement. `LOCAL_API_KEY` authenticates the separate

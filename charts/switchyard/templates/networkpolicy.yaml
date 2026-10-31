@@ -26,9 +26,13 @@ spec:
         - protocol: TCP
           port: {{ .Values.service.port }}
 {{- if and .Values.networkPolicy.allowNodePortSNAT (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) }}
+{{- if or (ne .Values.service.type "LoadBalancer") (not .Values.service.loadBalancerSourceRanges) (ne (index .Values.service.annotations "service.cilium.io/src-ranges-policy" | default "allow") "allow") }}
+{{- fail "Cilium NodePort forwarding requires LoadBalancer source ranges with an allow policy to filter LAN clients before SNAT" }}
+{{- end }}
 ---
 # The Service's Cilium source-range filter checks the original LAN source before
-# cross-node SNAT. These grants permit delivery from that receiving node only.
+# cross-node SNAT. Forwarded external traffic retains world identity even when
+# its source IP becomes a node address; host/remote-node and CIDRs do not match it.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -44,7 +48,7 @@ spec:
     matchLabels:
       {{- include "switchyard.selectorLabels" . | nindent 6 }}
   ingress:
-    - fromEntities: [host, remote-node]
+    - fromEntities: [host, remote-node, world]
       toPorts:
         - ports:
             - port: {{ .Values.service.port | quote }}

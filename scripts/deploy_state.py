@@ -110,6 +110,19 @@ def nodeport_only(objects: list[dict]) -> bool:
 
 def prepare(args: argparse.Namespace) -> None:
     desired = manifest_objects(args.manifest.read_text())
+    # Cross-node LAN traffic retains world identity after NodePort SNAT. The
+    # Service must filter the original source before that forwarding grant.
+    if any(
+        obj["kind"] == "CiliumNetworkPolicy"
+        and any("world" in rule.get("fromEntities", []) for rule in obj.get("spec", {}).get("ingress", []))
+        for obj in desired
+    ):
+        source_filter = command(
+            "kubectl", "--namespace", "kube-system", "get", "configmap", "cilium-config",
+            "--output=jsonpath={.data.bpf-lb-source-range-all-types}",
+        ).strip()
+        if source_filter != "true":
+            raise ValueError("Cilium must enable bpf.lbSourceRangeAllTypes for the Switchyard LAN source filter")
     releases = json.loads(command(
         "helm", "list", "--namespace", args.namespace, "--all",
         "--filter", "^" + args.release + "$", "-o", "json",

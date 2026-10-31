@@ -51,12 +51,15 @@ service:
 networkPolicy:
   allowedExternalCIDRs:
     - 192.168.1.0/24
+  # Forwarded LAN traffic retains Cilium's world identity after cross-node SNAT.
+  # Requires the Service source ranges and bpf.lbSourceRangeAllTypes=true.
   allowNodePortSNAT: true
   # CiliumInternalIPs used when NodePort traffic crosses to the backend node.
   nodeSourceCIDRs:
     - 10.0.1.110/32
     - 10.0.3.70/32
     - 10.0.2.190/32
+    - 10.0.0.232/32
     - 10.0.4.144/32
 
 config:
