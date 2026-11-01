@@ -565,6 +565,11 @@ Switchyard container. It does not place credential values in Helm values or the
 ConfigMap.
 
 Before changing the release, the deployment capability gate probes every target.
+It also reports the endpoint's advertised `context_window` from its model catalog.
+If a route declares `context_window`, every completion target it can select must
+advertise at least that many tokens; a smaller or unknown limit stops deployment.
+Without a declaration, missing metadata is reported as unknown. See the
+[capability gate](docs/capability-gate.md) for supported metadata fields and details.
 Both local-containing configurations use the shared Dynamo gateway's internal
 service:
 `http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1`.

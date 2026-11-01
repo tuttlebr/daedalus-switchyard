@@ -5,6 +5,33 @@ provider/model/settings combination before changing Kubernetes Secrets or the
 Helm release. A failed check exits unsuccessfully and preserves the active route.
 The same snapshot is used for validation and deployment.
 
+The gate also reads each target's `/models` catalog and reports its advertised
+`context_window` in tokens. It matches the exact model ID and accepts the
+`context_window`, `context_length`, `max_model_len`, and `max_context_length`
+fields. If multiple limits are present, it uses the smallest, so a serving cap
+takes precedence over a larger model limit. Discovery is cached per client/model
+for the duration of the check, across reasoning profiles.
+
+An optional `context_window` on a `[routes.<name>]` table is a required minimum
+for every completion target reachable through that route, including classifier
+choices, fallback targets and subagents. The gate rejects a smaller advertised
+limit with `context_window_too_small`. For example:
+
+```toml
+[routes.local]
+id = "daedalus/local"
+type = "passthrough"
+target = "local"
+context_window = 32768
+```
+
+A missing model, missing limit, or unsupported `/models` endpoint (HTTP 404,
+405 or 501) is reported as `context_window: null` with status `unknown` and a
+reason. It does not block an undeclared window, but a declared window that cannot
+be verified fails with `context_window_unknown`. Malformed metadata and other
+HTTP failures fail the gate. This reads provider metadata; it does not send a
+full-window prompt, prove long-context quality, or change route declarations.
+
 Each target must stream a completed text response, select a synthetic tool both
 automatically and explicitly, and consume a fresh unpredictable value returned
 by that tool. The gate checks arguments and call IDs. The tool is implemented
@@ -31,7 +58,9 @@ python3 -m unittest discover -s tests -p test_capabilities.py
 Cluster-local HTTP services are reached through a temporary localhost port
 forward in the current Kubernetes context. Other provider endpoints are reached
 directly. The report includes the routes digest, target settings digest, model
-identity, elapsed time and sanitized failure codes. It omits keys and response
+identity, advertised and required context windows, elapsed time and sanitized failure codes.
+Report version 2 adds context-window results; `checks` includes `context_window`
+only when a limit was found. It omits keys and response
 content. No automatic provider fallback or mutation replay is introduced.
 
 This proves upstream behavior for the tested requests. Validate gateway route

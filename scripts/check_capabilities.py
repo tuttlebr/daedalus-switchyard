@@ -17,6 +17,7 @@ import tempfile
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
@@ -108,6 +109,100 @@ class CheckFailed(Exception):
 def require(condition, code):
     if not condition:
         raise CheckFailed(code)
+
+
+@dataclass(frozen=True)
+class ContextWindow:
+    tokens: int | None = None
+    field: str | None = None
+    reason: str | None = None
+
+
+def discover_context_window(client: dict, model: str, *, timeout: float) -> ContextWindow:
+    """Read the serving endpoint's metadata, without generating a large prompt."""
+    key = os.environ.get(client.get("api_key_env", ""), "")
+    require(bool(key) or not client.get("api_key_env"), "missing_credential")
+    headers = {"Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    request = Request(client["base_url"].rstrip("/") + "/models", headers=headers)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read(2_000_000)
+            require(len(raw) < 2_000_000, "response_limit")
+            catalog = json.loads(raw)
+    except HTTPError as error:
+        # Some working inference services do not implement the optional catalog.
+        if error.code in (404, 405, 501):
+            error.close()
+            return ContextWindow(reason="models_endpoint_unavailable")
+        raise
+    require(isinstance(catalog, dict), "invalid_models_metadata")
+    require(not catalog.get("error"), "provider_error")
+    models = catalog.get("data")
+    require(
+        isinstance(models, list) and all(isinstance(item, dict) for item in models),
+        "invalid_models_metadata",
+    )
+    matches = [item for item in models if item.get("id") == model]
+    if not matches:
+        return ContextWindow(reason="model_not_listed")
+    limits = {}
+    for item in matches:
+        for field in ("context_window", "context_length", "max_model_len", "max_context_length"):
+            value = item.get(field)
+            if value is not None:
+                require(type(value) is int and value > 0, "invalid_context_window_metadata")
+                limits[field] = min(value, limits.get(field, value))
+    if not limits:
+        return ContextWindow(reason="context_window_not_reported")
+    # A serving cap can be lower than the architecture's context length.
+    field = min(limits, key=limits.get)
+    return ContextWindow(tokens=limits[field], field=field)
+
+
+def routing_targets(route: dict) -> set[str]:
+    """Completion destinations, including fallbacks but excluding judge-only models."""
+    kind = route["type"]
+    if kind == "noop":
+        names = set()
+    elif kind == "passthrough":
+        names = {route["target"]}
+    elif kind in ("random", "prefill_router"):
+        names = set(route["targets"])
+    elif kind in ("plan_execute", "auto", "stage_router"):
+        names = {route["capable_target"], route["efficient_target"]}
+    elif kind == "llm_classifier":
+        names = (
+            set(route["models"]["any"])
+            if route.get("mode") == "custom"
+            else {route["strong_target"], route["weak_target"]}
+        )
+    elif kind == "composite":
+        names = routing_targets({**route["stage"], "type": "stage_router"})
+        classifier = route["classifier"]
+        if classifier.get("type") == "decision_api":
+            names.update(choice["target"] for choice in classifier.get("choices", {}).values())
+    elif kind == "advisor":
+        names = {route["executor_target"]}
+    else:
+        raise CheckFailed("unsupported_context_window_route")
+    if "subagents" in route:
+        names.update(routing_targets(route["subagents"]))
+    return names
+
+
+def context_requirements(config: dict) -> dict[str, int]:
+    required = {}
+    for route in config.get("routes", {}).values():
+        if "context_window" not in route:
+            continue
+        value = route["context_window"]
+        require(type(value) is int and 0 < value <= 2**32 - 1, "invalid_context_window")
+        for name in routing_targets(route):
+            require(name in config["targets"], "unknown_context_window_target")
+            required[name] = max(value, required.get(name, 0))
+    return required
 
 
 def exchange(url, key, body, api, timeout):
@@ -315,17 +410,20 @@ def main():
     )
     raw = args.routes.read_bytes()
     config = tomllib.loads(raw.decode())
+    required_windows = context_requirements(config)
     report = {
-        "version": 1,
+        "version": 2,
         "routes_sha256": hashlib.sha256(raw).hexdigest(),
         "targets": [],
         "passed": True,
     }
     seen = set()
+    context_cache = {}
     for name, target in config["targets"].items():
         client = config["llm_clients"][target["llm_client"]]
+        required_window = required_windows.get(name)
         identity = json.dumps(
-            [client, target["model"], target.get("extra_body", {})], sort_keys=True
+            [client, target["model"], target.get("extra_body", {}), required_window], sort_keys=True
         )
         if identity in seen:
             continue
@@ -335,10 +433,28 @@ def main():
             "model": target["model"],
             "api": client["format"],
             "settings_sha256": hashlib.sha256(identity.encode()).hexdigest(),
+            "required_context_window": required_window,
         }
         started = time.monotonic()
         try:
             with reachable_client(client) as reachable:
+                # Share discovery across reasoning profiles, only within this run.
+                context_key = json.dumps([client, target["model"]], sort_keys=True)
+                if context_key not in context_cache:
+                    context_cache[context_key] = discover_context_window(
+                        reachable, target["model"], timeout=args.timeout
+                    )
+                context = context_cache[context_key]
+                row.update(
+                    context_window=context.tokens,
+                    context_window_field=context.field,
+                    context_window_status="reported" if context.tokens is not None else "unknown",
+                )
+                if context.reason:
+                    row["context_window_reason"] = context.reason
+                if required_window is not None:
+                    require(context.tokens is not None, "context_window_unknown")
+                    require(context.tokens >= required_window, "context_window_too_small")
                 row.update(
                     check_target(
                         reachable,
@@ -348,6 +464,8 @@ def main():
                     ),
                     passed=True,
                 )
+                if context.tokens is not None:
+                    row["checks"].append("context_window")
         except Exception as error:
             row.update(
                 passed=False,

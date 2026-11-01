@@ -1,6 +1,7 @@
 """Real SSE parser and roundtrip gate fault coverage, without provider credentials."""
 
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -9,8 +10,11 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "capabilities", Path(__file__).parents[1] / "scripts/check_capabilities.py"
@@ -18,6 +22,169 @@ spec = importlib.util.spec_from_file_location(
 probe = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = probe
 spec.loader.exec_module(probe)
+
+
+@contextmanager
+def model_catalog(payload, status=200):
+    requests = []
+
+    class Peer(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            requests.append((self.path, self.headers.get("Authorization")))
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Peer)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield SimpleNamespace(
+            client={"format": "openai_chat", "base_url": f"http://127.0.0.1:{server.server_port}/v1"},
+            requests=requests,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+class ContextWindows(unittest.TestCase):
+    def test_provider_fields_and_serving_cap(self):
+        for field in ("context_window", "context_length", "max_model_len", "max_context_length"):
+            with self.subTest(field=field), model_catalog(
+                {"data": [{"id": "fixture", field: 131072}]}
+            ) as peer:
+                with patch.dict(os.environ, {"FIXTURE_KEY": "synthetic"}):
+                    result = probe.discover_context_window(
+                        {**peer.client, "api_key_env": "FIXTURE_KEY"}, "fixture", timeout=2
+                    )
+                self.assertEqual(result.tokens, 131072)
+                self.assertEqual(result.field, field)
+                self.assertEqual(peer.requests, [("/v1/models", "Bearer synthetic")])
+        with model_catalog({"data": [{
+            "id": "fixture", "context_window": None, "context_length": 1048576, "max_model_len": 32768,
+        }]}) as peer:
+            result = probe.discover_context_window(peer.client, "fixture", timeout=2)
+            self.assertEqual(result.tokens, 32768)
+            self.assertEqual(result.field, "max_model_len")
+
+    def test_missing_metadata_is_unknown_and_model_match_is_exact(self):
+        for payload, status, reason in (
+            ({"data": [{"id": "fixture", "context_window": None}]}, 200, "context_window_not_reported"),
+            ({"data": [{"id": "other/fixture", "context_length": 131072}]}, 200, "model_not_listed"),
+            ({}, 404, "models_endpoint_unavailable"),
+            ({}, 405, "models_endpoint_unavailable"),
+            ({}, 501, "models_endpoint_unavailable"),
+        ):
+            with self.subTest(reason=reason, status=status), model_catalog(payload, status) as peer:
+                result = probe.discover_context_window(peer.client, "fixture", timeout=2)
+                self.assertIsNone(result.tokens)
+                self.assertEqual(result.reason, reason)
+
+    def test_malformed_metadata_and_auth_errors_are_not_silently_skipped(self):
+        for value in (0, -1, True, "131072", 131072.5):
+            with self.subTest(value=value), model_catalog(
+                {"data": [{"id": "fixture", "context_length": value}]}
+            ) as peer:
+                with self.assertRaisesRegex(probe.CheckFailed, "invalid_context_window_metadata"):
+                    probe.discover_context_window(peer.client, "fixture", timeout=2)
+        for payload in ([], {}, {"data": ["fixture"]}):
+            with self.subTest(payload=payload), model_catalog(payload) as peer:
+                with self.assertRaisesRegex(probe.CheckFailed, "invalid_models_metadata"):
+                    probe.discover_context_window(peer.client, "fixture", timeout=2)
+        with model_catalog({}, 401) as peer:
+            with self.assertRaises(probe.HTTPError) as failure:
+                probe.discover_context_window(peer.client, "fixture", timeout=2)
+            self.assertEqual(failure.exception.code, 401)
+            failure.exception.close()
+
+    def test_route_requirements_include_choices_fallbacks_and_subagents(self):
+        config = {
+            "targets": {name: {} for name in ("strong", "weak", "local", "worker", "judge")},
+            "routes": {
+                "fixed": {"type": "passthrough", "target": "strong", "context_window": 65536},
+                "composite": {
+                    "type": "composite", "context_window": 32768,
+                    "stage": {"capable_target": "strong", "efficient_target": "weak"},
+                    "classifier": {"type": "decision_api", "choices": {"private": {"target": "local"}}},
+                    "subagents": {
+                        "type": "llm_classifier", "mode": "custom",
+                        "models": {"any": ["worker"], "judge": ["judge"]},
+                    },
+                },
+            },
+        }
+        self.assertEqual(probe.context_requirements(config), {
+            "strong": 65536, "weak": 32768, "local": 32768, "worker": 32768,
+        })
+        for value in (0, -1, True, "32768", 2**32):
+            config["routes"]["fixed"]["context_window"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(probe.CheckFailed, "invalid_context_window"):
+                probe.context_requirements(config)
+
+    def test_gate_reports_limits_and_enforces_declarations_before_generation(self):
+        for advertised, required, expected_error in (
+            (32768, None, None),
+            (32768, 16384, None),
+            (32768, 32768, None),
+            (32768, 65536, "context_window_too_small"),
+            (None, None, None),
+            (None, 32768, "context_window_unknown"),
+        ):
+            with self.subTest(advertised=advertised, required=required), model_catalog(
+                {"data": [{"id": "fixture", "context_length": advertised}]}
+            ) as peer, tempfile.TemporaryDirectory() as directory:
+                routes = Path(directory) / "routes.toml"
+                report = Path(directory) / "report.json"
+                routes.write_text(
+                    '[llm_clients.fixture]\nformat="openai_responses"\n'
+                    f'base_url="{peer.client["base_url"]}"\n'
+                    '[targets.low]\nmodel="fixture"\nllm_client="fixture"\n'
+                    '[routes.low]\ntype="passthrough"\ntarget="low"\n'
+                    + (f'context_window={required}\n' if required is not None else "")
+                )
+                with patch.object(sys, "argv", ["probe", str(routes), "--report", str(report)]), patch.object(
+                    probe, "check_target", return_value={"checks": ["text"]}
+                ) as generation, redirect_stdout(io.StringIO()):
+                    exit_code = probe.main()
+                data = json.loads(report.read_text())
+                row = data["targets"][0]
+                self.assertEqual(exit_code, 1 if expected_error else 0)
+                self.assertEqual(data["passed"], not bool(expected_error))
+                self.assertEqual(row["context_window"], advertised)
+                self.assertEqual(row["required_context_window"], required)
+                self.assertEqual(row["context_window_status"], "unknown" if advertised is None else "reported")
+                self.assertEqual(row.get("error"), expected_error)
+                self.assertEqual(generation.call_count, 0 if expected_error else 1)
+                if not expected_error:
+                    self.assertEqual("context_window" in row["checks"], advertised is not None)
+
+    def test_duplicate_targets_cannot_hide_a_stricter_route_requirement(self):
+        with model_catalog({"data": [{"id": "fixture", "context_length": 32768}]}) as peer:
+            with tempfile.TemporaryDirectory() as directory:
+                routes = Path(directory) / "routes.toml"
+                report = Path(directory) / "report.json"
+                routes.write_text(
+                    '[llm_clients.fixture]\nformat="openai_chat"\n'
+                    f'base_url="{peer.client["base_url"]}"\n'
+                    '[targets.low]\nmodel="fixture"\nllm_client="fixture"\n'
+                    '[targets.high]\nmodel="fixture"\nllm_client="fixture"\n'
+                    '[routes.low]\ntype="passthrough"\ntarget="low"\ncontext_window=16384\n'
+                    '[routes.high]\ntype="passthrough"\ntarget="high"\ncontext_window=65536\n'
+                )
+                with patch.object(sys, "argv", ["probe", str(routes), "--report", str(report)]), patch.object(
+                    probe, "check_target", return_value={"checks": ["text"]}
+                ), redirect_stdout(io.StringIO()):
+                    self.assertEqual(probe.main(), 1)
+                rows = json.loads(report.read_text())["targets"]
+                self.assertEqual([row["passed"] for row in rows], [True, False])
+                self.assertEqual(rows[1]["error"], "context_window_too_small")
+                self.assertEqual(len(peer.requests), 1)
 
 
 class Capabilities(unittest.TestCase):
@@ -220,6 +387,11 @@ class Capabilities(unittest.TestCase):
                     self.exercise(api, fault)
 
     def test_failed_gate_leaves_release_and_secrets_unchanged(self):
+        with model_catalog({"data": [{"id": "fixture", "context_length": 32768}]}) as peer:
+            self.failed_deployment(peer.client["base_url"], "context_window_too_small", "context_window=65536\n")
+        self.failed_deployment("http://127.0.0.1:1/v1", "URLError")
+
+    def failed_deployment(self, base_url, error, declaration=""):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -231,7 +403,9 @@ class Capabilities(unittest.TestCase):
                 )
             routes = root / "routes.toml"
             routes.write_text(
-                '[llm_clients.fixture]\nformat="openai_chat"\nbase_url="http://127.0.0.1:1/v1"\napi_key_env="FIXTURE_KEY"\n[targets.low]\nmodel="fixture"\nllm_client="fixture"\n'
+                f'[llm_clients.fixture]\nformat="openai_chat"\nbase_url="{base_url}"\n'
+                'api_key_env="FIXTURE_KEY"\n[targets.low]\nmodel="fixture"\nllm_client="fixture"\n'
+                '[routes.low]\ntype="passthrough"\ntarget="low"\n' + declaration
             )
             calls = root / "calls"
             for command in ("helm", "kubectl"):
@@ -258,6 +432,7 @@ class Capabilities(unittest.TestCase):
                 timeout=15,
             )
             self.assertNotEqual(result.returncode, 0)
+            self.assertIn(error, result.stdout)
             observed = calls.read_text().splitlines()
             self.assertTrue(any(line.startswith("helm template") for line in observed))
             self.assertEqual(
