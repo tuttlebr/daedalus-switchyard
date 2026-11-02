@@ -16,8 +16,10 @@ import subprocess
 import tempfile
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from email.message import Message
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
@@ -102,13 +104,104 @@ def reachable_client(client):
                 process.wait()
 
 
+@dataclass
+class FailureDetails:
+    """Only protocol metadata, never prompts, output, tool arguments or keys."""
+
+    stage: str | None = None
+    request_id: str | None = None
+    event_index: int | None = None
+    previous_finish_reason: str | None = None
+    finish_reason: str | None = None
+    content_chars: int | None = None
+    tool_call_parts: int | None = None
+    done_seen: bool | None = None
+    violation: str | None = None
+
+
 class CheckFailed(Exception):
     """A sanitized failure code suitable for deployment output."""
+
+    def __init__(self, code: str, details: FailureDetails | None = None) -> None:
+        super().__init__(code)
+        self.details = details
 
 
 def require(condition, code):
     if not condition:
         raise CheckFailed(code)
+
+
+def error_code(error):
+    if isinstance(error, CheckFailed):
+        return str(error)
+    if isinstance(error, HTTPError):
+        return f"http_{error.code}"
+    return type(error).__name__
+
+
+@contextmanager
+def failure_context(details: FailureDetails) -> Iterator[None]:
+    try:
+        yield
+    except Exception as error:
+        if isinstance(error, CheckFailed):
+            if error.details is None:
+                error.details = details
+            elif details.stage is not None:
+                error.details.stage = details.stage
+            raise
+        # HTTP bodies and exception messages can contain credentials or content.
+        raise CheckFailed(error_code(error), details) from error
+
+
+def request_id(headers: Message | None, key: str) -> str | None:
+    for header in ("x-request-id", "x-fireworks-request-id", "fw-request-id"):
+        value = headers.get(header) if headers is not None else None
+        if (
+            isinstance(value, str)
+            and re.fullmatch(r"[A-Za-z0-9_.:/-]{1,200}", value)
+            and not (key and key in value)
+        ):
+            return value
+    return None
+
+
+def finish_label(value: str | None) -> str | None:
+    # Unknown provider values are useful to classify, but unsafe to echo verbatim.
+    known = (None, "stop", "tool_calls", "length", "content_filter", "function_call")
+    return value if value in known else "other"
+
+
+def failure_message(error: Exception) -> str:
+    code = error_code(error)
+    details = error.details if isinstance(error, CheckFailed) else None
+    messages = {
+        "content_after_finish": "The provider sent additional text after declaring the response finished.",
+        "tool_calls_after_finish": "The provider sent tool-call data after declaring the response finished.",
+        "conflicting_finish_reason": "The provider changed its finish reason after declaring the response finished.",
+        "duplicate_terminal": "The provider sent conflicting data after completion; see error_details.",
+        "missing_terminal": "The provider stream ended without the expected successful completion markers.",
+        "invalid_finish_reason": "The provider finish reason does not match the returned tool calls.",
+        "invalid_delta": "The provider sent a malformed Chat delta.",
+        "invalid_tool_calls": "The provider sent malformed tool-call fragments.",
+        "text_mismatch": "The model did not return the requested text marker.",
+        "tool_not_selected": "The model did not select exactly one synthetic probe tool.",
+        "invalid_arguments": "The model returned incorrect arguments for the synthetic probe tool.",
+        "result_not_consumed": "The model did not return the fresh marker supplied by the probe tool.",
+        "incomplete": "The provider reported a failed or incomplete response.",
+        "not_sse": "The provider did not return a server-sent event stream.",
+        "missing_credential": "The API-key environment variable configured for this target is empty or unset.",
+        "TimeoutError": "The provider request timed out.",
+        "request_deadline": "The provider stream exceeded the request deadline.",
+        "URLError": "Could not establish a connection to the provider endpoint.",
+        "JSONDecodeError": "The provider returned invalid JSON in a stream event or tool arguments.",
+    }
+    if details and details.violation in messages:
+        return messages[details.violation]
+    if code.startswith("http_"):
+        return f"The provider returned HTTP {code[5:]} during the capability check."
+    return messages.get(code, f"Capability check failed ({code}).")
 
 
 @dataclass(frozen=True)
@@ -206,6 +299,21 @@ def context_requirements(config: dict) -> dict[str, int]:
 
 
 def exchange(url, key, body, api, timeout):
+    details = FailureDetails(event_index=0)
+    with failure_context(details):
+        try:
+            result = read_exchange(url, key, body, api, timeout, details)
+        except HTTPError as error:
+            details.request_id = request_id(error.headers, key)
+            error.close()
+            raise
+    result["diagnostics"] = details
+    return result
+
+
+def read_exchange(
+    url: str, key: str, body: dict, api: str, timeout: float, details: FailureDetails,
+) -> dict:
     request = Request(
         url,
         data=json.dumps(body).encode(),
@@ -215,7 +323,10 @@ def exchange(url, key, body, api, timeout):
     text, calls, finish, done, model = "", {}, None, False, None
     completed = None
     size = 0
+    if api == "openai_chat":
+        details.done_seen = False
     with urlopen(request, timeout=timeout) as response:
+        details.request_id = request_id(response.headers, key)
         require(
             "text/event-stream" in response.headers.get("Content-Type", ""), "not_sse"
         )
@@ -229,7 +340,9 @@ def exchange(url, key, body, api, timeout):
             raw = line[5:].strip()
             if raw == b"[DONE]":
                 done = True
+                details.done_seen = True
                 break
+            details.event_index += 1
             value = json.loads(raw)
             require(not value.get("error"), "provider_error")
             if api == "openai_responses":
@@ -246,24 +359,55 @@ def exchange(url, key, body, api, timeout):
             model = value.get("model", model)
             for choice in value.get("choices", []):
                 require(choice.get("index", 0) == 0, "multiple_choices")
-                delta = choice.get("delta", {})
+                delta = choice.get("delta")
+                # An absent/null trailing delta carries no output, just like {}.
+                if delta is None:
+                    delta = {}
+                require(isinstance(delta, dict), "invalid_delta")
+                content = delta.get("content")
+                require(content is None or isinstance(content, str), "invalid_delta")
                 parts = delta.get("tool_calls")
                 require(parts is None or isinstance(parts, list), "invalid_tool_calls")
+                for part in parts or []:
+                    require(isinstance(part, dict), "invalid_tool_calls")
+                    require(type(part.get("index")) is int and part["index"] >= 0, "invalid_tool_calls")
+                    function = part.get("function")
+                    require(function is None or isinstance(function, dict), "invalid_tool_calls")
+                    require(
+                        all(value is None or isinstance(value, str) for value in (
+                            part.get("id"), (function or {}).get("name"), (function or {}).get("arguments"),
+                        )),
+                        "invalid_tool_calls",
+                    )
                 next_finish = choice.get("finish_reason")
+                details.previous_finish_reason = finish_label(finish)
+                details.finish_reason = finish_label(next_finish)
+                details.content_chars = len(content or "")
+                details.tool_call_parts = len(parts or [])
                 # Some Chat providers (including Mercury) use stop for completed
                 # tool calls. The roundtrip still validates IDs and JSON arguments.
                 if next_finish == "stop" and (calls or parts):
                     next_finish = "tool_calls"
                 if finish is not None:
-                    # Mercury repeats the finish reason in an empty final chunk.
-                    # Accept that repetition, but reject new data or a changed reason.
-                    require(
-                        not delta.get("content")
-                        and not parts
-                        and next_finish in (None, finish),
-                        "duplicate_terminal",
-                    )
-                text += delta.get("content") or ""
+                    # A nonempty tool_calls array can still be a no-op: an existing
+                    # index with empty fragments. Never append it again or create a
+                    # phantom call. New identities, names and arguments remain errors.
+                    if content:
+                        details.violation = "content_after_finish"
+                    elif any(
+                        part["index"] not in calls
+                        or part.get("id")
+                        or part.get("type") not in (None, "function")
+                        or (part.get("function") or {}).get("name")
+                        or (part.get("function") or {}).get("arguments")
+                        for part in parts or []
+                    ):
+                        details.violation = "tool_calls_after_finish"
+                    elif next_finish not in (None, finish):
+                        details.violation = "conflicting_finish_reason"
+                    require(details.violation is None, "duplicate_terminal")
+                    continue
+                text += content or ""
                 # Optional Chat delta fields may be explicitly null.
                 for part in parts or []:
                     call = calls.setdefault(
@@ -277,7 +421,7 @@ def exchange(url, key, body, api, timeout):
                     call["id"] += part.get("id") or ""
                     for field in ("name", "arguments"):
                         call["function"][field] += (
-                            part.get("function", {}).get(field) or ""
+                            (part.get("function") or {}).get(field) or ""
                         )
                 if next_finish is not None:
                     finish = next_finish
@@ -318,6 +462,15 @@ def exchange(url, key, body, api, timeout):
 
 
 def check_target(client, target, *, timeout=60, max_tokens=4096, transport=exchange):
+    details = FailureDetails(stage="setup")
+    with failure_context(details):
+        return run_target(client, target, timeout, max_tokens, transport, details)
+
+
+def run_target(
+    client: dict, target: dict, timeout: float, max_tokens: int,
+    transport: Callable, details: FailureDetails,
+) -> dict:
     api = client["format"]
     require(api in ("openai_chat", "openai_responses"), "unsupported_api")
     key = os.environ.get(client.get("api_key_env", ""), "")
@@ -337,13 +490,19 @@ def check_target(client, target, *, timeout=60, max_tokens=4096, transport=excha
         base["store"] = False
     identities = []
 
-    def send(body):
+    def send(body: dict, stage: str) -> dict:
+        details.stage = stage
+        details.request_id = None
         result = transport(url, key, body, api, timeout)
+        diagnostics = result.get("diagnostics")
+        if diagnostics is not None:
+            details.request_id = diagnostics.request_id
         identities.append(result["model"])
         return result
 
     text = send(
-        {**base, field: [{"role": "user", "content": "Reply with only CANARY_OK."}]}
+        {**base, field: [{"role": "user", "content": "Reply with only CANARY_OK."}]},
+        "text",
     )
     require(text["text"].strip() == "CANARY_OK" and not text["calls"], "text_mismatch")
     for forced in (False, True):
@@ -363,7 +522,8 @@ def check_target(client, target, *, timeout=60, max_tokens=4096, transport=excha
             else "auto"
         )
         body = {**base, field: conversation, "tools": [tool], "tool_choice": choice}
-        result = send(body)
+        stage = "forced_tool" if forced else "automatic_tool"
+        result = send(body, stage + "_selection")
         require(len(result["calls"]) == 1, "tool_not_selected")
         call = result["calls"][0]
         function = call["function"] if chat else call
@@ -384,7 +544,8 @@ def check_target(client, target, *, timeout=60, max_tokens=4096, transport=excha
                 **body,
                 field: conversation + result["history"] + [receipt],
                 "tool_choice": "none",
-            }
+            },
+            stage + "_result",
         )
         require(
             not final["calls"] and final["text"].strip() == marker,
@@ -467,14 +628,11 @@ def main():
                 if context.tokens is not None:
                     row["checks"].append("context_window")
         except Exception as error:
-            row.update(
-                passed=False,
-                error=str(error)
-                if isinstance(error, CheckFailed)
-                else f"http_{error.code}"
-                if isinstance(error, HTTPError)
-                else type(error).__name__,
-            )
+            row.update(passed=False, error=error_code(error), error_message=failure_message(error))
+            if isinstance(error, CheckFailed) and error.details is not None:
+                row["error_details"] = {
+                    key: value for key, value in asdict(error.details).items() if value is not None
+                }
             report["passed"] = False
         row["elapsed_seconds"] = round(time.monotonic() - started, 2)
         report["targets"].append(row)
