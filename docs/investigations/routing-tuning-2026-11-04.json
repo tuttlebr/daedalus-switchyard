@@ -1,0 +1,309 @@
+{
+  "reviewed_at_utc": "2026-11-04T20:53:18.822406+00:00",
+  "scope": "Local files and upstream documentation/source; no cluster queries or changes during this review",
+  "upstream_commit": "336196f6fbfc97ddc71c1700f6092e564e9f23c2",
+  "local_sha256": {
+    "Dockerfile": "9d48744f01d4437412fc0e7726496b2ac1ec2c40578ab035721b839007930583",
+    "Makefile": "ea264eaf60d915f67d7d232d060e87e7eb80d324f53121b384adf74699dde582",
+    "routes_custom.toml": "ca51cb086a6b3cfc1aad02efb79f94cc9c0acffc2fe8c2621faf47464b94c32e",
+    "routes_openai.toml": "eb77f012e83061b48b215cfbb527c2d8ad27d984562261d43ff6593e9575f0f4",
+    "patches/decision-api-classifier.patch": "e9e6310c3b3fc1fb9ae5e6c98c5b294a06eba62a817674cb3157a57ef01830bc",
+    "patches/decision-api-model-discovery.patch": "4e56a9f3be59eead35f4496e7ab5d9b22f6ae4ff9ab1716785be9340f775a696",
+    "scripts/test_decision_judge.py": "c6bb3ec140bd7c0c54917abc6f33481af884b264e4c3f05f58ac01e55277464d",
+    "scripts/test_routes.py": "ea16e639dd887e3b14df2ba5364ba4fbcf87c9177c3b6b48f10258f2d8d11869",
+    "charts/switchyard/templates/deployment.yaml": "0173faa4db5800b808a8977fad0844c5af6988815a79345fb1297035d738bcbd",
+    "charts/switchyard/values.yaml": "217d2f1d1996b4374bb5e07635c52827180bd1cc2f9bcb2741fb66029280fe84"
+  },
+  "downloaded_source_sha256": {
+    "examples.html": "f18ad9cff9cfdabc8e27bcbc1139d7353c2f5df62427dea8101418885bf03dc2",
+    "examples.md": "645d9728a34fbe47326b1aac87cd43566b209e241c6c18c67c647c543ed9ee55",
+    "pinned-cli.rs": "6a8840204fabff0729527868d11835d12f57bdca3d2b055e39780462ab2a9fac",
+    "pinned-composite.rs": "82ba844a120fbe15748a67e3ccbe56e849225531c8ccdc5861c9cc9791a0abf8",
+    "pinned-config.rs": "21cbddd23c2768bdb2507b7ff137c984b05808662e6135d324bd01b463398203",
+    "pinned-crates_switchyard-server_src_routing_log.rs": "7abfb79f820cf29e8387ccae2bab03628015dffe924520a325fa5f1fdb7fc356",
+    "pinned-stage-router.rs": "9bce89c4a5e9c957cd53eed559e446c593bce6a72f8e7dbcb066b822c632f0cc",
+    "pinned-stage.rs": "7b2641e7392ea3da809fdac0b40a6cf18739942291f271c3129430488f74f821",
+    "pinned-tool-signals.rs": "bce9ca868e1f07eeab8f0e89c835f85ba58ae13304da0379a3615ff61dcb7519"
+  },
+  "profiles": {
+    "routes_custom.toml": {
+      "route_id": "daedalus",
+      "algorithm": "composite",
+      "classifier": {
+        "type": "decision_api",
+        "model": "auto",
+        "classify_trigger": "user_turn",
+        "timeout_ms": 2000,
+        "recent_turn_window": 6,
+        "max_request_bytes": 65536,
+        "max_input_tokens": 16384
+      },
+      "thresholds": {
+        "local": 0.0,
+        "instant": 0.9,
+        "medium": 0.7,
+        "low": 0.8,
+        "high": 0.6,
+        "xhigh": 0.55,
+        "max": 0.0
+      },
+      "stage": {
+        "capable_target": "xhigh",
+        "efficient_target": "medium",
+        "confidence_threshold": 0.5,
+        "recent_turn_window": 3,
+        "capable_hold_turns": 2,
+        "tool_semantics": {
+          "observe": [
+            "get_memory",
+            "current_datetime_tool",
+            "perplexity_search_tool",
+            "webscrape_tool",
+            "domain_retriever_tool",
+            "nvidia_docs_tool",
+            "curated_feed_search_tool",
+            "tool_output_retriever_tool",
+            "source_verifier_tool",
+            "agent_skills_tool",
+            "hue_mcp_server__get_bridge_status",
+            "hue_mcp_server__list_resources",
+            "hue_mcp_server__get_resource"
+          ],
+          "mutate": [
+            "add_memory",
+            "hue_mcp_server__set_light_state"
+          ],
+          "new": [
+            "briefing_renderer_tool",
+            "content_distiller_tool",
+            "hue_mcp_server__connect"
+          ]
+        }
+      },
+      "targets": {
+        "max": {
+          "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+          "llm_client": "fireworks",
+          "extra_body": {
+            "reasoning_effort": "max",
+            "context_length_exceeded_behavior": "truncate"
+          }
+        },
+        "xhigh": {
+          "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+          "llm_client": "fireworks",
+          "extra_body": {
+            "reasoning_effort": "xhigh",
+            "context_length_exceeded_behavior": "truncate"
+          }
+        },
+        "high": {
+          "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+          "llm_client": "fireworks",
+          "extra_body": {
+            "reasoning_effort": "high",
+            "context_length_exceeded_behavior": "truncate"
+          }
+        },
+        "medium": {
+          "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+          "llm_client": "fireworks",
+          "extra_body": {
+            "reasoning_effort": "medium",
+            "context_length_exceeded_behavior": "truncate"
+          }
+        },
+        "low": {
+          "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+          "llm_client": "fireworks",
+          "extra_body": {
+            "reasoning_effort": "low",
+            "context_length_exceeded_behavior": "truncate"
+          }
+        },
+        "instant": {
+          "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+          "llm_client": "fireworks",
+          "extra_body": {
+            "reasoning_effort": "low",
+            "context_length_exceeded_behavior": "truncate",
+            "reasoning_history": "disabled"
+          }
+        },
+        "hindsight_local": {
+          "model": "nvidia/Muse-Glimmer-30B-NVFP4",
+          "llm_client": "local",
+          "extra_body": {
+            "reasoning_effort": "xhigh"
+          }
+        },
+        "local": {
+          "model": "nvidia/Muse-Glimmer-30B-NVFP4",
+          "llm_client": "local",
+          "extra_body": {
+            "reasoning_effort": "high"
+          }
+        },
+        "none": {
+          "model": "nvidia/Muse-Glimmer-30B-NVFP4",
+          "llm_client": "local",
+          "extra_body": {
+            "reasoning_effort": "medium"
+          }
+        }
+      }
+    },
+    "routes_openai.toml": {
+      "route_id": "daedalus",
+      "algorithm": "composite",
+      "classifier": {
+        "type": "decision_api",
+        "model": "auto",
+        "classify_trigger": "user_turn",
+        "timeout_ms": 2000,
+        "recent_turn_window": 6,
+        "max_request_bytes": 65536,
+        "max_input_tokens": 16384
+      },
+      "thresholds": {
+        "local": 0.0,
+        "instant": 0.9,
+        "medium": 0.9,
+        "low": 0.9,
+        "high": 0.9,
+        "xhigh": 0.55,
+        "max": 0.0
+      },
+      "stage": {
+        "capable_target": "xhigh",
+        "efficient_target": "medium",
+        "confidence_threshold": 0.5,
+        "recent_turn_window": 3,
+        "capable_hold_turns": 2,
+        "tool_semantics": {
+          "observe": [
+            "get_memory",
+            "current_datetime_tool",
+            "perplexity_search_tool",
+            "webscrape_tool",
+            "domain_retriever_tool",
+            "nvidia_docs_tool",
+            "curated_feed_search_tool",
+            "tool_output_retriever_tool",
+            "source_verifier_tool",
+            "agent_skills_tool",
+            "hue_mcp_server__get_bridge_status",
+            "hue_mcp_server__list_resources",
+            "hue_mcp_server__get_resource"
+          ],
+          "mutate": [
+            "add_memory",
+            "hue_mcp_server__set_light_state"
+          ],
+          "new": [
+            "briefing_renderer_tool",
+            "content_distiller_tool",
+            "hue_mcp_server__connect"
+          ]
+        }
+      },
+      "targets": {
+        "max": {
+          "model": "gpt-6-astra",
+          "llm_client": "openai",
+          "extra_body": {
+            "reasoning": {
+              "effort": "xhigh"
+            }
+          }
+        },
+        "xhigh": {
+          "model": "gpt-6-astra",
+          "llm_client": "openai",
+          "extra_body": {
+            "reasoning": {
+              "effort": "high"
+            }
+          }
+        },
+        "high": {
+          "model": "gpt-6-astra",
+          "llm_client": "openai",
+          "extra_body": {
+            "reasoning": {
+              "effort": "medium"
+            }
+          }
+        },
+        "medium": {
+          "model": "gpt-6.1-sol",
+          "llm_client": "openai",
+          "extra_body": {
+            "reasoning": {
+              "effort": "medium"
+            }
+          }
+        },
+        "low": {
+          "model": "gpt-6.1-sol",
+          "llm_client": "openai",
+          "extra_body": {
+            "reasoning": {
+              "effort": "low"
+            }
+          }
+        },
+        "instant": {
+          "model": "gpt-6-luna",
+          "llm_client": "openai",
+          "extra_body": {
+            "reasoning": {
+              "effort": "medium"
+            }
+          }
+        },
+        "local": {
+          "model": "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB",
+          "llm_client": "local",
+          "extra_body": {
+            "chat_template_kwargs": {
+              "enable_thinking": true,
+              "medium_effort": true
+            },
+            "nvext": {
+              "max_thinking_tokens": 256
+            }
+          }
+        },
+        "hindsight_local": {
+          "model": "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB",
+          "llm_client": "local",
+          "extra_body": {
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            }
+          }
+        },
+        "none": {
+          "model": "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB",
+          "llm_client": "local",
+          "extra_body": {
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "sources": [
+    "https://nvidia-nemo.github.io/Switchyard/tuning/",
+    "https://nvidia-nemo.github.io/Switchyard/tuning/foundations/",
+    "https://nvidia-nemo.github.io/Switchyard/tuning/examples/",
+    "https://nvidia-nemo.github.io/Switchyard/routing_algorithms/overview/",
+    "https://nvidia-nemo.github.io/Switchyard/routing_algorithms/composite_routing/",
+    "https://nvidia-nemo.github.io/Switchyard/routing_algorithms/stage_router_routing/",
+    "https://nvidia-nemo.github.io/Switchyard/routing_algorithms/model_selection/",
+    "https://nvidia-nemo.github.io/Switchyard/operations/troubleshooting/"
+  ]
+}

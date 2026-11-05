@@ -1,0 +1,492 @@
+diff --git a/crates/switchyard-runner/src/decision_api.rs b/crates/switchyard-runner/src/decision_api.rs
+index ceab574a..642c45fc 100644
+--- a/crates/switchyard-runner/src/decision_api.rs
++++ b/crates/switchyard-runner/src/decision_api.rs
+@@ -11,7 +11,7 @@ use async_trait::async_trait;
+ use libsy::{
+     Algorithm, Classification, Classifier, ClassifyTrigger, Driver, RoutingOutcome, Score, State,
+ };
+-use serde::Deserialize;
++use serde::{Deserialize, Serialize};
+ use serde_json::{Value, json};
+ use switchyard_protocol::{Category, ContentBlock, ModelId, Request, Role};
+ 
+@@ -21,6 +21,30 @@ const QUESTION: &str = "effort";
+ // Clef rounds every option probability to four decimal places.
+ const ROUNDING_TOLERANCE: f64 = 0.0005;
+ const MAX_RESPONSE_BYTES: usize = 65536;
++// Tokenization includes token IDs even though the router only consumes the count.
++const MAX_TOKENIZER_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
++
++#[derive(Clone, Debug, Deserialize)]
++#[serde(untagged)]
++pub enum InputTokenLimit {
++    Fixed(u64),
++    Auto(AutoInputTokenLimit),
++}
++
++#[derive(Clone, Debug, Deserialize)]
++#[serde(rename_all = "snake_case")]
++pub enum AutoInputTokenLimit {
++    Auto,
++}
++
++impl InputTokenLimit {
++    fn fixed(&self) -> Option<u64> {
++        match self {
++            Self::Fixed(value) => Some(*value),
++            Self::Auto(_) => None,
++        }
++    }
++}
+ 
+ /// A named decision option mapped to an answering target.
+ #[derive(Clone, Debug, Deserialize)]
+@@ -59,12 +83,15 @@ pub struct DecisionClassifierConfig {
+     /// Recent messages following the preserved opening task.
+     #[serde(default = "default_window")]
+     pub recent_turn_window: usize,
+-    /// Maximum serialized request bytes. Oversized context is not silently truncated.
++    /// Legacy rejection guard. Token-aware truncation replaces this byte limit.
+     #[serde(default = "default_request_bytes")]
+     pub max_request_bytes: usize,
+-    /// Server context ceiling. A response at the ceiling may have been truncated.
++    /// Server context ceiling, or "auto" to use the served model's max_model_len.
+     #[serde(default = "default_input_tokens")]
+-    pub max_input_tokens: u64,
++    pub max_input_tokens: InputTokenLimit,
++    /// Fit judge-only state using SGLang's generic SystemOne renderer and /v1/tokenize.
++    #[serde(default)]
++    pub truncate_input: bool,
+     /// Instructions explaining what to decide; conversation content is untrusted data.
+     pub instructions: String,
+     /// Whole-task criteria for the efficient answering tier.
+@@ -95,8 +122,8 @@ const fn default_window() -> usize {
+ const fn default_request_bytes() -> usize {
+     12000
+ }
+-const fn default_input_tokens() -> u64 {
+-    16384
++const fn default_input_tokens() -> InputTokenLimit {
++    InputTokenLimit::Fixed(16384)
+ }
+ 
+ impl DecisionClassifierConfig {
+@@ -169,7 +196,7 @@ impl DecisionClassifierConfig {
+         }
+         if self.max_request_bytes == 0
+             || self.max_request_bytes > 65536
+-            || self.max_input_tokens == 0
++            || self.max_input_tokens.fixed() == Some(0)
+         {
+             return Err(AlgorithmConfigError::new(
+                 "decision_api input limits must be positive; max_request_bytes must be at most 65536",
+@@ -180,6 +207,11 @@ impl DecisionClassifierConfig {
+                 "decision_api recent_turn_window must be at most 64",
+             ));
+         }
++        if self.truncate_input && self.criteria().len() > 26 {
++            return Err(AlgorithmConfigError::new(
++                "decision_api truncate_input supports up to 26 generic SystemOne options",
++            ));
++        }
+         for (name, value) in [
+             ("model", &self.model),
+             ("instructions", &self.instructions),
+@@ -268,6 +300,20 @@ struct DecisionModels {
+ #[derive(Deserialize)]
+ struct DecisionModel {
+     id: String,
++    #[serde(default)]
++    max_model_len: Option<u64>,
++}
++#[derive(Deserialize)]
++struct TokenCount {
++    count: u64,
++}
++#[derive(Serialize)]
++struct InputReport {
++    context_limit: u64,
++    input_tokens: u64,
++    original_request_bytes: usize,
++    request_bytes: usize,
++    truncated: bool,
+ }
+ #[derive(Deserialize)]
+ struct DecisionUsage {
+@@ -340,7 +386,22 @@ impl DecisionClassifier {
+             .len()
+             .saturating_sub(self.config.recent_turn_window)
+             .max(opening + 1);
+-        let indices = std::iter::once(opening).chain(start..llm.messages.len());
++        let mut indices: Vec<_> = std::iter::once(opening)
++            .chain(start..llm.messages.len())
++            .collect();
++        if self.config.truncate_input {
++            // The current task can be older than the recent tool window.
++            if let Some(latest_user) = llm.messages.iter().rposition(|m| {
++                m.role == Role::User
++                    && m.content
++                        .iter()
++                        .any(|block| matches!(block, ContentBlock::Text { .. }))
++            }) {
++                indices.push(latest_user);
++                indices.sort_unstable();
++                indices.dedup();
++            }
++        }
+         let mut messages = Vec::new();
+         for index in indices {
+             let message = &llm.messages[index];
+@@ -375,7 +436,7 @@ impl DecisionClassifier {
+             }}
+         });
+         let body = serde_json::to_vec(&payload).map_err(|_| "invalid_input")?;
+-        if body.len() > self.config.max_request_bytes {
++        if !self.config.truncate_input && body.len() > self.config.max_request_bytes {
+             return Err("input_too_large");
+         }
+         Ok(body)
+@@ -387,6 +448,16 @@ impl DecisionClassifier {
+         &self,
+         request: reqwest::RequestBuilder,
+         deadline: Instant,
++    ) -> Result<Vec<u8>, &'static str> {
++        self.send_limited(request, deadline, MAX_RESPONSE_BYTES)
++            .await
++    }
++
++    async fn send_limited(
++        &self,
++        request: reqwest::RequestBuilder,
++        deadline: Instant,
++        max_response_bytes: usize,
+     ) -> Result<Vec<u8>, &'static str> {
+         let remaining = deadline
+             .checked_duration_since(Instant::now())
+@@ -407,7 +478,7 @@ impl DecisionClassifier {
+         }
+         if response
+             .content_length()
+-            .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
++            .is_some_and(|n| n > max_response_bytes as u64)
+         {
+             return Err("response_too_large");
+         }
+@@ -419,7 +490,7 @@ impl DecisionClassifier {
+                 "transport"
+             }
+         })? {
+-            if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
++            if bytes.len() + chunk.len() > max_response_bytes {
+                 return Err("response_too_large");
+             }
+             bytes.extend_from_slice(&chunk);
+@@ -427,12 +498,15 @@ impl DecisionClassifier {
+         Ok(bytes)
+     }
+ 
+-    async fn verdict(&self, mut body: Vec<u8>) -> Result<ChoiceAnswer, &'static str> {
++    async fn verdict(
++        &self,
++        mut body: Vec<u8>,
++    ) -> Result<(ChoiceAnswer, InputReport), &'static str> {
+         let deadline = Instant::now() + Duration::from_millis(self.config.timeout_ms);
+-        let model = if self.config.model == "auto" {
+-            // Resolve on every classification, so a model replacement is picked
+-            // up on the next user turn without restarting the gateway. Retained
+-            // tool continuations still reuse the original task target.
++        let original_request_bytes = body.len();
++        let mut context_limit = self.config.max_input_tokens.fixed();
++        let model = if self.config.model == "auto" || context_limit.is_none() {
++            // Refresh both identity and serving limit on every classification.
+             let url = self
+                 .endpoint
+                 .join("models")
+@@ -440,8 +514,18 @@ impl DecisionClassifier {
+             let bytes = self.send(self.client.get(url), deadline).await?;
+             let models: DecisionModels =
+                 serde_json::from_slice(&bytes).map_err(|_| "model_discovery")?;
+-            let [model] = models.data.as_slice() else {
+-                return Err("model_discovery");
++            let model = if self.config.model == "auto" {
++                let [model] = models.data.as_slice() else {
++                    return Err("model_discovery");
++                };
++                model
++            } else {
++                let mut matches = models.data.iter().filter(|m| m.id == self.config.model);
++                let model = matches.next().ok_or("model_discovery")?;
++                if matches.next().is_some() {
++                    return Err("model_discovery");
++                }
++                model
+             };
+             if model.id.is_empty()
+                 || model.id.len() > 512
+@@ -450,11 +534,19 @@ impl DecisionClassifier {
+             {
+                 return Err("model_discovery");
+             }
++            if context_limit.is_none() {
++                context_limit = Some(
++                    model
++                        .max_model_len
++                        .filter(|n| *n > 1)
++                        .ok_or("model_context_limit")?,
++                );
++            }
+             let model = model.id.clone();
+             let mut payload: Value = serde_json::from_slice(&body).map_err(|_| "invalid_input")?;
+             payload["model"] = json!(model);
+             body = serde_json::to_vec(&payload).map_err(|_| "invalid_input")?;
+-            if body.len() > self.config.max_request_bytes {
++            if !self.config.truncate_input && body.len() > self.config.max_request_bytes {
+                 return Err("input_too_large");
+             }
+             tracing::info!(event = "decision_api_model_discovered", model = %model);
+@@ -462,6 +554,18 @@ impl DecisionClassifier {
+         } else {
+             self.config.model.clone()
+         };
++        let context_limit = context_limit.ok_or("model_context_limit")?;
++        let mut measured_tokens = None;
++        let mut truncated = false;
++        if self.config.truncate_input {
++            let result = self
++                .fit_payload(body, &model, context_limit, deadline)
++                .await?;
++            body = result.0;
++            measured_tokens = Some(result.1);
++            truncated = result.2;
++        }
++        let request_bytes = body.len();
+         let request = self
+             .client
+             .post(self.endpoint.clone())
+@@ -476,10 +580,24 @@ impl DecisionClassifier {
+         if verdict.answers.len() != 1
+             || verdict.usage.output_tokens != 0
+             || verdict.usage.input_tokens == 0
+-            || verdict.usage.input_tokens >= self.config.max_input_tokens
++            || verdict.usage.input_tokens >= context_limit
+         {
+             return Err("invalid_response");
+         }
++        // Detect an incompatible prompt renderer instead of trusting an undercount.
++        if measured_tokens.is_some_and(|count| count != verdict.usage.input_tokens) {
++            return Err("token_count_mismatch");
++        }
++        let input = InputReport {
++            context_limit,
++            input_tokens: verdict.usage.input_tokens,
++            original_request_bytes,
++            request_bytes,
++            truncated,
++        };
++        tracing::info!(event = "decision_api_input_prepared", model = %model,
++            context_limit, input_tokens = input.input_tokens, original_request_bytes,
++            request_bytes, truncated);
+         let answer = verdict
+             .answers
+             .into_iter()
+@@ -488,13 +606,170 @@ impl DecisionClassifier {
+             .1;
+         let options = self.config.criteria();
+         validate_answer(&answer, options.keys().map(String::as_str))?;
+-        Ok(answer)
++        Ok((answer, input))
++    }
++
++    async fn fit_payload(
++        &self,
++        body: Vec<u8>,
++        model: &str,
++        limit: u64,
++        deadline: Instant,
++    ) -> Result<(Vec<u8>, u64, bool), &'static str> {
++        let mut payload: Value = serde_json::from_slice(&body).map_err(|_| "invalid_input")?;
++        // Match the generic scorer's non-reasoning answer position.
++        payload["chat_template_kwargs"] = json!({"enable_thinking": false});
++        let original = payload["state"].clone();
++        let mut budget = serde_json::to_vec(&original)
++            .map_err(|_| "invalid_input")?
++            .len();
++        for attempt in 0..12 {
++            let prompt = render_systemone_prompt(&payload)?;
++            let request = self
++                .client
++                .post(self.endpoint.join("tokenize").map_err(|_| "tokenizer")?)
++                .json(
++                    &json!({"model":model,"messages":[{"role":"user","content":prompt}],
++                    "chat_template_kwargs":{"enable_thinking":false}}),
++                );
++            let bytes = self
++                .send_limited(request, deadline, MAX_TOKENIZER_RESPONSE_BYTES)
++                .await?;
++            let count: TokenCount = serde_json::from_slice(&bytes).map_err(|_| "tokenizer")?;
++            if count.count == 0 {
++                return Err("tokenizer");
++            }
++            if count.count < limit {
++                // Preserve exactly the text that was counted. A JSON string is
++                // valid SystemOne state and avoids Python/Rust number-format
++                // differences when tool arguments contain floating-point values.
++                payload["state"] = Value::String(payload["state"].to_string());
++                return Ok((
++                    serde_json::to_vec(&payload).map_err(|_| "invalid_input")?,
++                    count.count,
++                    attempt > 0,
++                ));
++            }
++            if attempt > 0 && budget == 0 {
++                return Err("routing_question_too_large");
++            }
++            // Use measured density, then re-count; bytes are never treated as tokens.
++            // The final attempt checks a minimal state, so excessive history cannot
++            // reach the scoring endpoint even for unusually dense text.
++            budget = if attempt >= 9 {
++                0
++            } else {
++                ((budget as f64 * (limit - 1) as f64 / count.count as f64 * 0.95) as usize)
++                    .min(budget.saturating_sub(1))
++            };
++            payload["state"] = compact_state(&original, budget);
++        }
++        Err("routing_question_too_large")
++    }
++}
++
++/// Mirrors the pinned SGLang generic SystemOne choice renderer used by Elephant.
++/// Tokenization applies the hosted model's chat template, not a local estimate.
++fn render_systemone_prompt(payload: &Value) -> Result<String, &'static str> {
++    let question = &payload["questions"][QUESTION];
++    let instructions = question["instructions"].as_str().ok_or("invalid_input")?;
++    let criteria = question["criteria"].as_object().ok_or("invalid_input")?;
++    if criteria.len() > 26 {
++        return Err("unsupported_tokenizer_format");
++    }
++    let mut prompt = serde_json::to_string(&payload["state"]).map_err(|_| "invalid_input")?;
++    prompt.push_str("\n\nQuestion: ");
++    prompt.push_str(instructions);
++    for (index, (name, value)) in criteria.iter().enumerate() {
++        prompt.push_str(&format!(
++            "\n{}: {name} - {}",
++            char::from(b'A' + index as u8),
++            value.as_str().ok_or("invalid_input")?
++        ));
++    }
++    prompt.push_str("\nAnswer with the letter of one option only.");
++    Ok(prompt)
++}
++
++/// Keep typed message roles and both ends of each text excerpt. The answering
++/// request is never mutated. Whole routing instructions/options are outside state.
++fn compact_state(original: &Value, budget: usize) -> Value {
++    let messages = original["messages"].as_array().cloned().unwrap_or_default();
++    let weights: Vec<usize> = messages
++        .iter()
++        .enumerate()
++        .map(|(i, m)| {
++            if i == 0 || i + 2 >= messages.len() || m["role"] == "user" {
++                3
++            } else {
++                1
++            }
++        })
++        .collect();
++    let mut segments = vec![
++        (original["client_instructions"].to_string(), 1),
++        (original["available_tools"].to_string(), 1),
++    ];
++    segments.extend(
++        messages
++            .iter()
++            .zip(&weights)
++            .map(|(message, weight)| (message["content"].to_string(), *weight)),
++    );
++    // Redistribute unused shares from short fields to larger excerpts.
++    let mut allocated = vec![0usize; segments.len()];
++    let mut remaining = budget;
++    while remaining > 0 {
++        let total: usize = segments
++            .iter()
++            .zip(&allocated)
++            .filter(|((text, _), size)| text.len() > **size)
++            .map(|((_, weight), _)| *weight)
++            .sum();
++        if total == 0 {
++            break;
++        }
++        let round_budget = remaining;
++        for (index, (text, weight)) in segments.iter().enumerate() {
++            let share = (round_budget.saturating_mul(*weight) / total)
++                .max(1)
++                .min(text.len() - allocated[index])
++                .min(remaining);
++            allocated[index] += share;
++            remaining -= share;
++        }
++    }
++    let compact_messages: Vec<_> = messages.iter().enumerate().map(|(index, message)| {
++        json!({"role":message["role"],"content":excerpt(&segments[index + 2].0, allocated[index + 2])})
++    }).collect();
++    json!({
++        "context_truncated":true,
++        "client_instructions":excerpt(&segments[0].0, allocated[0]),
++        "messages":compact_messages,
++        "available_tools":excerpt(&segments[1].0, allocated[1]),
++    })
++}
++
++fn excerpt(text: &str, budget: usize) -> String {
++    const MARKER: &str = "\n[truncated]\n";
++    if text.len() <= budget {
++        return text.to_owned();
++    }
++    let keep = budget.saturating_sub(MARKER.len());
++    let mut head = keep / 2;
++    let mut tail = text.len().saturating_sub(keep - head);
++    while !text.is_char_boundary(head) {
++        head -= 1;
++    }
++    while !text.is_char_boundary(tail) {
++        tail += 1;
+     }
++    format!("{}{MARKER}{}", &text[..head], &text[tail..])
+ }
+ 
+ // Reasoning and opaque/media payloads do not cross into this text-only classifier.
+-// Unsupported input or oversized preserved context defaults capable, never a
+-// truncated or misleading efficient forecast. Answer requests retain all input.
++// Unsupported input defaults capable. Oversized text is either rejected by the
++// legacy byte guard or fitted by the opt-in tokenizer path. Answer input is intact.
+ fn sanitized(blocks: &[ContentBlock]) -> Result<Vec<Value>, &'static str> {
+     let mut result = Vec::new();
+     for block in blocks {
+@@ -569,14 +844,14 @@ impl Classifier<State> for DecisionClassifier {
+         };
+         let mut selected_target = None;
+         let category = match result {
+-            Ok(answer) => {
++            Ok((answer, input)) => {
+                 let efficient = if self.config.choices.is_empty() {
+                     let threshold = self
+                         .config
+                         .efficient_threshold
+                         .unwrap_or(default_threshold());
+                     driver.set_evidence_if_empty(json!({"source":"decision_api","choice":answer.choice,
+-                        "efficient_probability":answer.probabilities["efficient"],"efficient_threshold":threshold}));
++                        "efficient_probability":answer.probabilities["efficient"],"efficient_threshold":threshold,"input":input}));
+                     answer.choice == "efficient" && answer.probabilities["efficient"] >= threshold
+                 } else {
+                     let choice = self.config.choices.get(&answer.choice);
+@@ -589,7 +864,7 @@ impl Classifier<State> for DecisionClassifier {
+                     driver.set_evidence_if_empty(json!({"source":"decision_api","choice":answer.choice,
+                         "probabilities":answer.probabilities,
+                         "min_probability":choice.map(|choice| choice.min_probability),
+-                        "accepted":accepted,"selected_target":selected_target.as_ref().or_else(||driver.models_for(&Category::Capable).first())}));
++                        "accepted":accepted,"selected_target":selected_target.as_ref().or_else(||driver.models_for(&Category::Capable).first()),"input":input}));
+                     accepted
+                 };
+                 if efficient {

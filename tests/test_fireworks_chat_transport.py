@@ -213,6 +213,9 @@ class FireworksChatTransportTest(unittest.TestCase):
                 # Pin this existing Clef fixture; automatic model replacement is
                 # covered by the dedicated decision gateway contract tests.
                 source = source.replace('model = "auto"', 'model = "Cloudflare/clef-flash"')
+                # These legacy Clef fixtures do not implement Elephant tokenization.
+                source = source.replace('max_input_tokens = "auto"', 'max_input_tokens = 16384')
+                source = source.replace('truncate_input = true', 'truncate_input = false\nmax_request_bytes = 65536')
                 # These transport tests exercise the original same-provider
                 # effort contract, independently of editable production maps.
                 for target in ("max", "xhigh", "high", "medium", "low", "instant"):
@@ -232,6 +235,24 @@ class FireworksChatTransportTest(unittest.TestCase):
                     '[routes.none]\nid = "daedalus/none"\ntype = "passthrough"\n'
                     'target = "low"\ntool_calling = true\nreasoning = true\n\n', source,
                 )
+                if composite != "standalone":
+                    # Legacy algorithm tests keep their original Composite configuration.
+                    source = source.replace('type = "decision_api"\n# Failure', 'type = "composite"\n# Failure', 1)
+                    source = source.replace('default_target = "xhigh"\n', '', 1)
+                    source = source.replace('classify_trigger = "every_request"', 'classify_trigger = "user_turn"', 1)
+                    source = source.replace('[routes.max]', (
+                        '[routes.stage.stage]\ncapable_target = "max"\n'
+                        'efficient_target = "high"\nconfidence_threshold = 0.5\n'
+                        'recent_turn_window = 3\ncapable_hold_turns = 2\n'
+                        '[routes.stage.stage.tool_semantics]\n'
+                        'mutate = ["add_memory", "hue_mcp_server__set_light_state"]\n'
+                        'new = ["briefing_renderer_tool", "content_distiller_tool", "hue_mcp_server__connect"]\n\n[routes.max]'
+                    ), 1)
+                    for target in ("low", "medium", "high"):
+                        source = re.sub(
+                            rf'(\[routes\.stage\.classifier\.choices\.{target}\]\ntarget = "{target}"\nmin_probability = )[0-9.]+',
+                            r'\g<1>0.90', source,
+                        )
                 config = tomllib.loads(source)
                 if composite is True:
                     # Freeze the earlier two-target contract independently of the current policy.
@@ -311,8 +332,8 @@ class FireworksChatTransportTest(unittest.TestCase):
                     )
                     if decision_auth:
                         source = source.replace(
-                            'type = "decision_api"',
-                            'type = "decision_api"\napi_key_env = "NATIVE_DECISION_TEST_KEY"',
+                            '[routes.stage.classifier]\ntype = "decision_api"',
+                            '[routes.stage.classifier]\ntype = "decision_api"\napi_key_env = "NATIVE_DECISION_TEST_KEY"',
                         )
                 if judge_delay or judge_body_delay:
                     source = source.replace(
@@ -1310,6 +1331,29 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(headers["x-model-router-selected-model"], target)
                 captured.get(timeout=5)
                 self.assertTrue(captured.empty())
+
+    def test_standalone_uses_real_profile_and_rejudges_streaming_tool_continuations(self):
+        with self.router(
+            composite="standalone", verdict=self.target_verdict("low"), decision_auth=True
+        ) as (url, captured, config):
+            route = config["routes"]["stage"]
+            self.assertEqual(route["type"], "decision_api")
+            self.assertEqual(route["default_target"], "xhigh")
+            self.assertNotIn("stage", route)
+            for stream in (False, True):
+                for critical in (False, True):
+                    headers = self.request(
+                        url, input=self.continuation(output="out of memory" if critical else "checks passed"), stream=stream,
+                        headers={"x-switchyard-session-id": "standalone-fixture"},
+                    )
+                    self.assertEqual(headers["x-model-router-selected-model"], "low")
+                    path, judge, native_headers = captured.get(timeout=5)
+                    self.assertEqual(path, "/v1/systemone")
+                    self.assertIn("NEXT Daedalus model", judge["questions"]["effort"]["instructions"])
+                    self.assertIn("authorization", {k.lower() for k in native_headers})
+                    _, body, _ = captured.get(timeout=5)
+                    self.assertEqual(body["reasoning_effort"], "low")
+                    self.assertTrue(captured.empty())
 
     def test_winning_local_choice_has_no_probability_gate(self):
         with self.router(

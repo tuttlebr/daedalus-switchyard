@@ -1,0 +1,236 @@
+diff --git a/crates/switchyard-runner/src/algorithm.rs b/crates/switchyard-runner/src/algorithm.rs
+index fe470bf0..6c8116e6 100644
+--- a/crates/switchyard-runner/src/algorithm.rs
++++ b/crates/switchyard-runner/src/algorithm.rs
+@@ -9,7 +9,7 @@ use std::fmt::{Display, Formatter};
+ use std::path::PathBuf;
+ use std::sync::Arc;
+ 
+-use crate::decision_api::{DecisionClassifier, DecisionClassifierConfig};
++use crate::decision_api::{DecisionClassifier, DecisionClassifierConfig, DecisionRouter};
+ use libsy::{
+     AdvisorGate, AdvisorGateConfig, Algorithm, ClassifierContractConfig, ClassifierResponseFormat,
+     ClassifyTrigger, CompositeRouter, CompositeRouterConfig, CustomClassifierConfig,
+@@ -353,6 +353,13 @@ pub enum AlgorithmSpec {
+         #[serde(flatten)]
+         config: LlmClassifierRouteConfig,
+     },
++    /// Makes a fresh native SystemOne decision for every answering request.
++    DecisionApi {
++        /// Used when the decision is unavailable, uncertain, or below its score gate.
++        default_target: String,
++        /// Must be a native decision_api classifier with named choices and every_request.
++        classifier: CompositeClassifierConfig,
++    },
+     /// Picks a tier per turn by scoring signals from recent tool results.
+     StageRouter {
+         #[serde(flatten)]
+@@ -582,6 +589,16 @@ impl AlgorithmSpec {
+         match self {
+             Self::Noop { .. } => Vec::new(),
+             Self::Random { targets, .. } => targets.iter().map(String::as_str).collect(),
++            Self::DecisionApi {
++                default_target,
++                classifier,
++            } => {
++                let mut names = vec![default_target.as_str()];
++                if let CompositeClassifierConfig::DecisionApi(c) = classifier {
++                    names.extend(c.choices.values().map(|choice| choice.target.as_str()));
++                }
++                names
++            }
+             Self::Passthrough {
+                 target, subagents, ..
+             } => {
+@@ -719,6 +736,16 @@ impl AlgorithmSpec {
+     ) -> AlgorithmResult<RuntimeModelNames> {
+         let parent = match self {
+             Self::Noop { .. } => HashMap::new(),
++            Self::DecisionApi { default_target, .. } => category_models([
++                (Category::Capable, vec![default_target.clone()]),
++                (
++                    Category::Any,
++                    self.routing_target_names()
++                        .into_iter()
++                        .map(str::to_owned)
++                        .collect(),
++                ),
++            ]),
+             Self::Random { targets, .. } | Self::PrefillRouter { targets, .. } => {
+                 category_models([(Category::Any, targets.clone())])
+             }
+@@ -838,6 +865,7 @@ impl AlgorithmSpec {
+             | Self::StageRouter { .. }
+             | Self::Auto { .. }
+             | Self::Composite { .. }
++            | Self::DecisionApi { .. }
+             | Self::PrefillRouter { .. } => None,
+         }
+     }
+@@ -847,6 +875,10 @@ impl AlgorithmSpec {
+             Self::Composite {
+                 classifier: CompositeClassifierConfig::DecisionApi(c),
+                 ..
++            }
++            | Self::DecisionApi {
++                classifier: CompositeClassifierConfig::DecisionApi(c),
++                ..
+             } => c.api_key(),
+             _ => Ok(None),
+         }
+@@ -1235,6 +1267,22 @@ fn build_algorithm(
+ ) -> AlgorithmResult<Arc<dyn Algorithm>> {
+     match config {
+         AlgorithmSpec::Noop { .. } => Ok(Arc::new(Noop {})),
++        AlgorithmSpec::DecisionApi {
++            default_target,
++            classifier,
++        } => {
++            let CompositeClassifierConfig::DecisionApi(config) = classifier else {
++                return Err(AlgorithmConfigError::new(
++                    "standalone decision_api requires classifier.type = decision_api",
++                ));
++            };
++            let default = resolve_target_model_id(route_name, default_target, targets)?;
++            Ok(Arc::new(DecisionRouter::new(
++                config.clone(),
++                targets,
++                default,
++            )?))
++        }
+         AlgorithmSpec::Random {
+             targets: names,
+             weights,
+diff --git a/crates/switchyard-runner/src/decision_api.rs b/crates/switchyard-runner/src/decision_api.rs
+index e4c61267..ceab574a 100644
+--- a/crates/switchyard-runner/src/decision_api.rs
++++ b/crates/switchyard-runner/src/decision_api.rs
+@@ -1,13 +1,16 @@
+ // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-//! Native SystemOne decisions used to set a Composite task target.
++//! Native SystemOne decisions for standalone per-request and Composite task routing.
+ 
+ use std::collections::BTreeMap;
++use std::sync::Arc;
+ use std::time::{Duration, Instant};
+ 
+ use async_trait::async_trait;
+-use libsy::{Classification, Classifier, ClassifyTrigger, Driver, Score, State};
++use libsy::{
++    Algorithm, Classification, Classifier, ClassifyTrigger, Driver, RoutingOutcome, Score, State,
++};
+ use serde::Deserialize;
+ use serde_json::{Value, json};
+ use switchyard_protocol::{Category, ContentBlock, ModelId, Request, Role};
+@@ -27,7 +30,7 @@ pub struct DecisionTargetConfig {
+     pub target: String,
+     /// Tasks for which this target is sufficient.
+     pub criteria: String,
+-    /// Minimum probability of the winning option. Lower scores use the stage capable target.
++    /// Minimum probability of the winning option. Lower scores use the route's default target.
+     #[serde(default = "default_threshold")]
+     pub min_probability: f64,
+ }
+@@ -50,7 +53,7 @@ pub struct DecisionClassifierConfig {
+     /// Minimum efficient-choice probability; ambiguous decisions remain capable.
+     #[serde(default)]
+     pub efficient_threshold: Option<f64>,
+-    /// User-turn/session classification frequency. Hash fallback is unsupported.
++    /// Composite uses user_turn/new_session; standalone requires every_request.
+     #[serde(default = "default_trigger")]
+     pub classify_trigger: ClassifyTrigger,
+     /// Recent messages following the preserved opening task.
+@@ -177,11 +180,6 @@ impl DecisionClassifierConfig {
+                 "decision_api recent_turn_window must be at most 64",
+             ));
+         }
+-        if self.classify_trigger == ClassifyTrigger::EveryRequest {
+-            return Err(AlgorithmConfigError::new(
+-                "decision_api classify_trigger must be user_turn or new_session",
+-            ));
+-        }
+         for (name, value) in [
+             ("model", &self.model),
+             ("instructions", &self.instructions),
+@@ -630,6 +628,58 @@ impl Classifier<State> for DecisionClassifier {
+     }
+ }
+ 
++/// Stateless routing: tool continuations get the same fresh decision as user turns.
++/// Only the configured default is a provider fallback; other choices are not a cascade.
++pub(crate) struct DecisionRouter {
++    classifier: DecisionClassifier,
++    default_target: ModelId,
++}
++
++impl DecisionRouter {
++    pub(crate) fn new(
++        config: DecisionClassifierConfig,
++        targets: &BTreeMap<String, ModelId>,
++        default_target: ModelId,
++    ) -> Result<Self, AlgorithmConfigError> {
++        if config.classify_trigger != ClassifyTrigger::EveryRequest || config.choices.is_empty() {
++            return Err(AlgorithmConfigError::new(
++                "standalone decision_api requires named choices and classify_trigger = every_request",
++            ));
++        }
++        Ok(Self {
++            classifier: DecisionClassifier::new(config, targets)?,
++            default_target,
++        })
++    }
++}
++
++#[async_trait]
++impl Algorithm for DecisionRouter {
++    fn name(&self) -> &str {
++        "decision_api"
++    }
++
++    async fn route(
++        self: Arc<Self>,
++        driver: Driver,
++        mut request: Request,
++    ) -> libsy::Result<RoutingOutcome> {
++        let (classification, _) = self
++            .classifier
++            .score(&mut State::default(), &mut request, &driver)
++            .await?;
++        let target = classification
++            .argmax(false)?
++            .map_or_else(|| self.default_target.clone(), |score| score.target);
++        let fallbacks = if target == self.default_target {
++            Vec::new()
++        } else {
++            vec![self.default_target.clone()]
++        };
++        Ok(RoutingOutcome::route_to(target, fallbacks, request))
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -713,7 +763,7 @@ uncertain_criteria = "Missing or ambiguous context."
+         assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
+         let mut c = config();
+         c.classify_trigger = ClassifyTrigger::EveryRequest;
+-        assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
++        assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_ok());
+         let mut c = config();
+         c.recent_turn_window = 65;
+         assert!(DecisionClassifier::new(c, &BTreeMap::new()).is_err());
+@@ -750,6 +800,11 @@ uncertain_criteria = "Missing or ambiguous context."
+             ("large".into(), ModelId::from("large-id")),
+         ]);
+         assert!(DecisionClassifier::new(c.clone(), &targets).is_ok());
++        let default = ModelId::from("large-id");
++        assert!(DecisionRouter::new(c.clone(), &targets, default.clone()).is_err());
++        c.classify_trigger = ClassifyTrigger::EveryRequest;
++        assert!(DecisionRouter::new(c.clone(), &targets, default.clone()).is_ok());
++        assert!(DecisionRouter::new(config(), &targets, default).is_err());
+         assert!(DecisionClassifier::new(c.clone(), &BTreeMap::new()).is_err());
+         let mut mixed = c.clone();
+         mixed.efficient_threshold = Some(0.9);

@@ -22,13 +22,13 @@ Sensitive work (including reading, summarizing, or replying to email) prefers
 `local` before considering difficulty. Greetings and simple social exchanges
 use `instant`; routine synthesis uses `medium`. The custom configuration uses
 Fireworks, Inception and local Dynamo; the OpenAI configuration uses OpenAI and
-the same local Bolt endpoint. Both retain explicit `daedalus/<profile>` routes.
+the local Dynamo endpoint. Both retain explicit `daedalus/<profile>` routes.
 
 This is a classifier preference, not a local-only privacy guarantee: the local
-decision service receives classification context, and stage recovery or provider
-failure can still choose the cloud `capable_target`. Clients requiring local-only
+decision service receives classification context, and judge or provider
+failure can still choose the cloud `default_target`. Clients requiring local-only
 answering should request `daedalus/local`, which bypasses the classifier and
-Composite fallback. Automatic policy changes take effect when the updated route
+automatic fallback. Automatic policy changes take effect when the updated route
 file is deployed; they do not alter the provider models or effort defaults.
 
 `routes_inception.toml` uses Inception Labs' `mercury-3` through its
@@ -53,7 +53,7 @@ the existing Makefile discovers `make deploy-route_inception` automatically.
 ```mermaid
 flowchart LR
   A[Daedalus Rust agent] -->|Responses API| B[Switchyard]
-  B -->|daedalus: judge + stage| C[max, xhigh, high, medium, low, instant or local]
+  B -->|daedalus: judge every request| C[max, xhigh, high, medium, low, instant or local]
   B -->|deep / xhigh / max / other explicit route| D[fixed effort target]
   C --> E[Configured cloud provider]
   C --> F[Local Dynamo: Chat Completions]
@@ -69,23 +69,22 @@ Chat Completions completed, so this upstream transport is intentional.
 
 | Requested model | Switchyard target | Requested Fireworks effort | Use |
 | --- | --- | --- | --- |
-| `daedalus` | Native Composite choices: `max`, `xhigh`, `high`, `medium`, `low`, `instant`, `local` | Selected target's effort | Automatic/default profile |
-| `daedalus/deep`, `daedalus/xhigh` | `xhigh` | `xhigh` | Deep profile; daily summaries and mapped skills |
+| `daedalus` | Standalone decisions: `max`, `xhigh`, `high`, `medium`, `low`, `instant`, `local` | Selected target's effort | Automatic/default profile; reclassified every call |
+| `daedalus/deep` | `max` | `max` | Explicit deep profile |
+| `daedalus/xhigh` | `xhigh` | `xhigh` | Explicit xhigh profile |
 | `daedalus/max` | `max` | `max` | Explicit `deep_max` profile |
 | `daedalus/high` | `high` | `high` | Fixed high effort |
 | `daedalus/medium` | `medium` | `medium` | Fixed requested medium effort |
 | `daedalus/low` | `low` | `low` | Explicit latency-oriented choice |
-| `daedalus/none` | `none` | N/A | Fixed local Bolt model; nonthinking default |
-| `daedalus/local` | `local` | N/A | `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` on local Dynamo / GB10 |
-| `daedalus/hindsight-local` | `hindsight_local` | N/A | Same local model; nonthinking default for Hindsight text maintenance |
+| `daedalus/none` | `none` | N/A | Fixed local target with profile-specific defaults |
+| `daedalus/local` | `local` | N/A | Configured model on local Dynamo |
+| `daedalus/hindsight-local` | `hindsight_local` | N/A | Local target for Hindsight text maintenance |
 
 `daedalus/hindsight-local` exists in both OpenAI and custom profiles and always
-uses the local passthrough destination. Its target defaults
-`chat_template_kwargs.enable_thinking` to `false`, with no effort or hard
-thinking budget. Caller fields retain the normal shallow-merge precedence.
-Hindsight roles configured with `/none` use the same nonthinking local model;
-main/reflect clients can retain `daedalus/local`. This route change preserves
-the owner's existing role selections, including image clients.
+uses the local passthrough destination. Model and reasoning defaults are defined
+by each profile: the custom profile currently uses Muse-Glimmer and the OpenAI
+profile uses Bolt. Caller fields retain the normal shallow-merge precedence.
+Standalone routing preserves these existing explicit targets and defaults.
 
 The effort column describes the value sent on the wire. Live GLM probes accepted
 `low`, `medium`, `high`, `xhigh`, and `max` on October 6, 2026; that does not
@@ -95,14 +94,14 @@ between tool calls within the current user turn. They do not send
 `reasoning_effort="none"` or discard in-turn reasoning.
 
 Daedalus selects profiles before Switchyard selects targets. Explicit request
-profiles take precedence. With automatic selection, daily-summary requests
-start deep; loading `daily-summary`, `fantasy-football-recap`, `sre-engineer`, or
-`kubernetes-specialist` promotes subsequent rounds to deep. `deep_max` is
-explicit only. The deployed deep override is `daedalus/xhigh`; the workflow's
-fallback `daedalus/deep` resolves to the same target. These choices do not change
-tools, approval authority, timeouts, or iteration budgets.
+profiles take precedence and bypass the automatic classifier. Client-side
+workflow/skill overrides that request a fixed route continue to do so; this
+change only affects calls addressed to the automatic `daedalus` alias.
 
-### What the stage router actually does
+### Historical stage routing
+
+The following stage behavior describes the earlier automatic configuration.
+It does not apply to the standalone route now in the custom and OpenAI profiles.
 
 The v0.3.0 stage router reads tool results and agent progress. Its built-in
 vocabulary is calibrated for coding tools; it does not classify task complexity
@@ -214,177 +213,163 @@ before applying these target defaults.
 
 ## Automatic reasoning routing
 
-The current deployment uses `routes_openai.toml`. Both it and `routes_custom.toml`
-set the native SystemOne classifier's `model = "auto"`: on each classification,
-Switchyard reads the decision service's `/v1/models` and uses its single served
-model, currently `baselabs/elephant-1`. Replacing the decision model, including
-switching back to Clef-Flash, takes effect on the next user turn without a
-Switchyard redeployment. Existing tool continuations retain their task target.
-Explicit effort routes bypass discovery and classification. Discovery and scoring
-share the configured two-second deadline, response size limits and service-owned
-authentication. Empty, ambiguous or malformed model lists and a decision response
-whose model differs from the discovered identity use the capable fallback. An
-explicit model ID still pins that model and skips discovery.
+Both `routes_custom.toml` and `routes_openai.toml` now configure the public
+`daedalus` alias as a standalone native decision classifier:
 
-`patches/decision-api-model-discovery.patch` implements this behavior. It prevents
-the stale Clef-Flash configuration that rejected valid Elephant decisions as
-`invalid_response` and sent all automatic requests to max on October 26, 2026.
+```toml
+[routes.stage]
+id = "daedalus"
+type = "decision_api"
+default_target = "xhigh"
+tool_calling = true
+reasoning = true
 
-The automatic choices remain `low`, `high`,
-`xhigh`, and `max`. SGLang returns optional `x_label_mass` metadata for Elephant;
-the gateway validates it as a finite value in `[0, 1]` and uses the option
-probabilities for routing. Clef responses without that field remain supported.
-Unknown answer fields and invalid model, question, usage, or probability data
-still trigger the capable fallback. Elephant uses SGLang's generic label scorer;
-the Clef joint-head details below describe the earlier model.
+[routes.stage.classifier]
+type = "decision_api"
+model = "auto"
+base_url = "http://decision-api.daedalus.svc.cluster.local:30000/v1"
+classify_trigger = "every_request"
+# Keep the instructions, limits and choices from the complete route file.
+```
 
-`patches/decision-api-sglang-metadata.patch` adds this compatibility to the built
-gateway. The image build runs its Rust contract tests. The captured synthetic
-Elephant response in `tests/fixtures/elephant_choice_response.json` also exercises
-actual Chat Completions and Responses routing through the release binary:
+The table key `stage` is retained for operator tooling; the algorithm is no longer
+Composite. Each request to the automatic alias gets a fresh decision, including
+tool continuations, repeated requests and retries. There is no retained task floor,
+stage override, recovery hold or `[routes.stage.stage]` table. The judge evaluates
+the next response using the opening task, client instructions, recent messages
+and tools. Effort can decrease for mechanical follow-through and increase again
+for difficult synthesis, conflicting evidence or recovery. Successful tools alone
+do not justify a downgrade when the next response still needs deep reasoning.
+Sensitive work continues to prefer local across follow-ups.
+
+This configuration requires a rebuilt gateway containing
+`patches/decision-api-standalone.patch`, applied after the existing native
+classifier and model-discovery patches. It is a local extension to the pinned
+v0.3.0 runner that preserves the SystemOne protocol and probability gates.
+The standalone route has been deployed. The subsequent input-budget change
+requires another image rebuild; see [decision input limits](docs/decision-input-limits.md).
+See [standalone routing and QA](docs/standalone-decision-routing.md) for validation
+and rollout instructions.
+
+With `model = "auto"`, every classification reads the decision service's
+`/v1/models` and uses its single served model. Model replacement takes effect on
+the next request, including tool continuations. An explicit model ID pins that
+model and skips discovery. Discovery and scoring share a **2-second total
+deadline**, including response-body reads, with no retry or redirect. Empty,
+ambiguous or malformed model lists and mismatched response identities use the
+configured default for that request.
+
+The native service receives SystemOne `state` and one typed `choice` question
+named `effort`, with seven configured choices plus `uncertain`. The choice
+labels describe reasoning requirements independently of provider identities:
+
+| Profile | Requirements for the next response |
+| --- | --- |
+| `local` | Sensitive or private work, including retrieving email or private records |
+| `instant` | Greetings, thanks and brief social exchanges |
+| `low` | Mechanical extraction, classification, direct facts and predictable tool steps |
+| `medium` | Summaries, explanations, bounded research and ordinary implementation |
+| `high` | Difficult multi-step reasoning, hard debugging and adaptive investigation |
+| `xhigh` | Unusually deep analysis, competing explanations and independent cross-checks |
+| `max` | Exceptional reasoning or consequences, including data-integrity risks |
+
+A winning choice must meet its own `min_probability`:
+
+| Profile | Custom | OpenAI |
+| --- | ---: | ---: |
+| local | 0.00 | 0.00 |
+| instant | 0.90 | 0.90 |
+| low | 0.80 | 0.90 |
+| medium | 0.70 | 0.90 |
+| high | 0.60 | 0.90 |
+| xhigh | 0.55 | 0.55 |
+| max | 0.00 | 0.00 |
+
+These are starting gates, not calibrated probabilities of task success.
+Uncertain or below-gate choices, unavailable services, timeouts and invalid
+responses use `default_target = "xhigh"`. Oversized judge context is truncated
+to fit. The next request is classified again. An answering-provider failure tries only the default target
+when it differs from the selected target; it does not cycle through other
+choices. A winning local choice has no probability gate, but judge or provider
+failures can still reach the cloud default. Use `daedalus/local` for local-only
+answering. The automatic route is not a privacy boundary.
+
+Each choice maps a label to a configured answering target:
+
+```toml
+[routes.stage.classifier.choices.medium]
+target = "medium"
+min_probability = 0.70
+criteria = "Routine bounded synthesis or an ordinary implementation step."
+```
+
+Labels need not match target names. `uncertain` is reserved and uses
+`uncertain_criteria`; all targets must exist in `[targets]`. Recheck thresholds
+when the choice pool, instructions or decision model changes, because these
+changes alter the probability distribution. Explicit profiles such as
+`daedalus/deep`, `/max`, `/medium`, `/low` and `/local` bypass the judge.
+Provider model mappings and caller overrides remain in effect: an explicit
+caller-supplied reasoning effort still overrides the selected target's default.
+
+The native contract validates exact question/options, a choice matching the
+highest probability, finite confidence metadata, normalized option probabilities
+and native usage with zero generated tokens. Optional SGLang `x_label_mass`
+metadata is validated but does not gate routing. Clef responses without this
+field remain supported. Unknown answer fields remain errors. Logs include bounded
+failure reason codes and `decision_api_classified` timing, never response bodies.
+
+Judge input preserves client instructions, the opening task, the latest ordinary
+user instruction, six recent messages and available tool names. Private reasoning
+is omitted. Both profiles set `max_input_tokens = "auto"` and `truncate_input = true`.
+Switchyard reads the hosted limit from `/v1/models`, counts the complete decision
+prompt with Elephant's hosted tokenizer and trims only classifier context until
+it fits. The current serving limit is 16,384 tokens; the scorer requires input
+strictly below that limit. The old 64 KiB rejection gate does not apply in this
+mode. Answer requests retain the complete input. Unsupported media or unavailable
+metadata/tokenization still uses the configured default. See
+[decision input limits](docs/decision-input-limits.md) for the protocol, logs and QA.
+No session identifier is required for correctness. Existing session headers and
+provider cache affinity remain compatible.
+
+To enable service-owned bearer authentication, configure
+`api_key_env = "DECISION_API_KEY"` in the classifier and supply that key;
+`scripts/list_api_key_envs.py` discovers it for deployment. Caller credentials
+and arbitrary headers are not forwarded to the decision service. Native decision
+classifiers do not require a judge entry in `llm_clients` or `targets`.
+
+Legacy Composite routes remain supported. They may use LLM or native decision
+classifiers with `user_turn` or `new_session`, stage semantics and retained
+targets. The legacy two-target native schema remains available there; standalone
+native routes require named choices and `classify_trigger = "every_request"`.
+
+The gateway tests exercise actual HTTP routing against local decision/provider
+fixtures, including effort changes across tool continuations on both APIs,
+probability gates, recovery after timeout, provider fallback, explicit bypass,
+streaming and legacy Composite compatibility:
 
 ```bash
 SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
   python3 -m unittest discover -s tests -p test_decision_api.py -v
-python3 scripts/test_decision_judge.py routes_openai.toml \
-  --base-url http://127.0.0.1:30090/v1
 ```
 
-The standalone probe validates the service contract; the binary tests also
-verify target selection, session reuse, explicit bypass, and fallback behavior.
+After maintenance, the separate synthetic judge probe can check the configured
+question against a reachable decision service:
 
-The original `routes_custom.toml` configuration used Composite routing for
-`daedalus` with Cloudflare Clef-Flash. Both models use the service configured in
-`../decision-api`:
-
-```text
-http://decision-api.daedalus.svc.cluster.local:30000/v1/systemone
-current model: baselabs/elephant-1
+```bash
+python3 scripts/test_decision_judge.py routes_custom.toml \
+  --base-url http://127.0.0.1:30090/v1 --output /tmp/decision-routing-probe.json
 ```
 
-The classifier sends SystemOne `state` and one typed `choice` question named
-`effort`, with configurable named target choices and an `uncertain` option.
-Both current route files use `max`, `xhigh`, `high`, `medium`, `low`, `instant`,
-and `local`. Privacy-sensitive work takes priority over difficulty; greetings
-use instant, mechanical work low, short summaries/explanations medium, and
-work with multiple dependent steps high.
-It uses the model's native joint head without a
-Chat endpoint, generated verdict, free-text `crux`, or artificial `p_solve`.
-A winning named choice must meet its own `min_probability` threshold to set the
-task target: **0.90** for instant, low, medium and high; **0.55** for xhigh;
-and **0.00** for max and local. A winning local choice has no probability gate,
-so it is not rejected in favor of a cloud target solely for low probability.
-Uncertainty, insufficient probability and judge failures use
-`stage.capable_target`: currently max in custom and xhigh in OpenAI.
-For non-sensitive work, daily summaries, substantive code and complete HTML
-pages require at least xhigh; exceptional complexity requires max. Sensitive
-work prefers local regardless of complexity, including an email-based briefing.
-These criteria and thresholds are starting policies, not calibrated accuracy.
-The stage router still applies tool evidence, critical-error escalation and
-recovery holds. Its existing confidence threshold remains 0.5.
+The probe covers 20 synthetic workloads and reports winning labels and targets
+after gates. `make test` runs route smoke checks; it does not run that probe or
+an answer-quality benchmark. Neither mock contracts nor judge-only probes
+establish routing accuracy or savings. QA should replay held-out tool trajectories,
+compare against fixed xhigh, and measure completion, tool arguments/order, output
+constraints, latency and token use. The new route adds judge latency on every
+automatic request.
 
-Each choice maps a label to a target and describes when that target is sufficient:
-
-```toml
-[routes.stage.classifier.choices.routine]
-target = "medium"
-min_probability = 0.90
-criteria = "Routine bounded synthesis or a short dependent tool sequence."
-```
-
-Replace or extend the choice tables to use more configurations or different models.
-Labels need not match target names. `uncertain` is reserved and uses
-`uncertain_criteria`; every target must exist in `[targets]`. Choose a capable
-target suitable for recovery across the entire choice pool. All seven profiles
-are available automatically and explicitly. The local profile uses the existing
-Dynamo service in both files; OpenAI deployments now also need `LOCAL_API_KEY`.
-
-The selected task target is retained through tool continuations. Healthy production
-signals return to that target, including xhigh, rather than dropping to the fixed
-`efficient_target`. Recovery signals escalate to the configured capable target;
-the two-turn hold then returns to the retained task target. Provider failures try
-the capable target only, without cycling through cheaper choices. In this mode,
-`stage.efficient_target` supplies the stage library's tier pair; it does not limit
-the judge to that target. The old `efficient_criteria`, `capable_criteria` and
-`efficient_threshold` schema remains supported for two-target routing, but cannot
-be mixed with named choices.
-
-Traces are not required to define these criteria. They are useful for collecting
-representative task inputs, tool sequences, recovery cases and outcomes. To tune
-the policy, replay safe cases against fixed target configurations and score task
-completion, tool names/arguments/order, output constraints, latency and token use.
-A trace from one target cannot show whether a cheaper target would also succeed.
-Freeze a held-out workload before tuning, and compare the routed candidate with
-the fixed capable baseline. Changing the choice pool changes the probability
-distribution, so recheck thresholds whenever choices or models change.
-
-The classifier runs on a request ending in a new user message, including steering
-or a runtime synthesis instruction. Daedalus sends `x-switchyard-session-id` as
-an opaque hash scoped to authenticated user and conversation (run ID when there
-is no conversation). Tool continuations reuse the verdict. The existing `user`
-field still supplies provider cache affinity; the gateway session header is not
-forwarded to Fireworks. Repeated user requests and retries may judge again.
-Session state is in memory and is lost on restart/eviction; unclassified tool
-continuations default to max. Do not enable message-hash fallback, which can
-merge unrelated users with identical opening text.
-
-The native judge has a **2-second total deadline**, including body reads, with
-no retry or redirect. A refused connection, unavailable service, timeout, invalid
-answer/distribution, wrong model or exhausted context defaults to the capable
-tier. It verifies the exact question/options, a choice matching the highest
-probability, finite confidence metadata and normalized probabilities (allowing Clef's four-decimal rounding), and
-native usage with zero generated tokens. SystemOne confidence metadata can use
-a different normalization from option probabilities; policy reads the option
-probabilities directly. Failures are logged with bounded reason
-codes, never response bodies; timing is logged as `decision_api_classified`.
-
-The request preserves client instructions, the opening task, six recent messages
-and available tool names. Private reasoning is omitted. Unsupported media/opaque
-blocks or a request exceeding 65,536 serialized bytes default to max without
-silently truncating the judge context. Answer requests retain the complete input.
-A reported input-token count at the configured 16,384 context ceiling also defaults
-capable because the service may have truncated state. Adjust that ceiling if you
-change the target service's context limit.
-
-Explicit profiles such as `daedalus/deep`, `/max`, `/medium`, `/low`, and `/local`
-bypass the judge. To enable service-owned bearer authentication, configure
-`api_key_env = "DECISION_API_KEY"` in the classifier and supply the matching key;
-`scripts/list_api_key_envs.py` includes it in deployment credential discovery.
-Caller credentials, routing/user header metadata and arbitrary headers are not
-forwarded to the decision service. The default service is configured without a bearer key.
-
-The Dockerfile applies `patches/decision-api-classifier.patch` after the existing
-patches. Rebuild before deploying this TOML. Existing LLM Composite classifiers
-remain supported with `type = "llm"` or no classifier `type`. They retain their
-original verdict schema and target settings. Native decision classifiers have
-no judge entry in `llm_clients` or `targets`.
-
-Exact native and Hue MCP tool names supply stage semantics:
-
-- `observe`: memory/time, search, scraping, retrieval, sources, skills and Hue reads.
-- `mutate`: memory writes and setting Hue light state.
-- `new`: briefing rendering, content distillation and Hue catalogue connection.
-
-Mixed-operation tools such as sandbox, documents, visual media and user interaction
-remain unclassified. No dedicated Daedalus tool is exclusively a planning tool;
-built-in plan semantics remain available. These labels affect stage scoring, not
-authorization. In particular, `mutate` favors the retained task target.
-
-The answering targets use the configured provider model with different effort
-settings. The choice mapping can also select other configured
-models. Caller-supplied effort continues to
-override answering defaults. Native classifier probabilities express choice
-confidence and require broader workload calibration.
-A judge adds latency to each new user turn; semantic and compatibility checks do
-not establish a speedup or prove distinct internal provider compute tiers.
-
-Native integration validation covers the built parser, typed HTTP requests and
-responses, probability boundaries and rounding, session reuse/isolation, profile
-bypass, error/body deadlines, context guards and server-owned credentials. These
-contract tests do not establish Clef's routing accuracy. The companion Daedalus
-runtime session-header change in `../daedalus-agent` must be present to reuse
-classifications in the live tool loop. The current deployed Daedalus image passed
-its HTTP contract, including session-header propagation, on October 11.
+The following records describe earlier Composite deployments and evaluations;
+they do not validate the new standalone policy.
 
 The named-choice implementation was deployed on October 11 with
 `make deploy-route_fireworks` at Switchyard Helm revision 99. Validation passed
@@ -422,7 +407,7 @@ python3 scripts/test_decision_judge.py routes_custom.toml \
 The probe checks the native model/question/usage/distribution contract and
 reports choice scores and policy defaults. It does not execute the synthetic
 requested actions or certify answer quality. Follow with the frozen task/tool
-workload before promoting the Composite policy to production.
+workload before promoting a new routing policy to production.
 
 The previous October 11 GLM-judge Composite implementation was built and tested
 but **not deployed**. Its historical evaluation is described below; it does not

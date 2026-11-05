@@ -271,6 +271,9 @@ def routing_targets(route: dict) -> set[str]:
             if route.get("mode") == "custom"
             else {route["strong_target"], route["weak_target"]}
         )
+    elif kind == "decision_api":
+        names = {route["default_target"]}
+        names.update(choice["target"] for choice in route["classifier"]["choices"].values())
     elif kind == "composite":
         names = routing_targets({**route["stage"], "type": "stage_router"})
         classifier = route["classifier"]

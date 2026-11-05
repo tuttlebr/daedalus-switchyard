@@ -16,7 +16,7 @@ class FireworksRoutesTest(unittest.TestCase):
         for alias in ("daedalus", "daedalus/deep", "daedalus/xhigh", "daedalus/max"):
             self.assertIn(alias, routes)
         for route in routes.values():
-            for key in ("target", "capable_target", "efficient_target"):
+            for key in ("target", "default_target", "capable_target", "efficient_target"):
                 if key in route:
                     self.assertIn(route[key], targets)
             if route["type"] == "composite":
@@ -26,6 +26,24 @@ class FireworksRoutesTest(unittest.TestCase):
                     self.assertIn(route["stage"][key], targets)
                 for choice in route["classifier"].get("choices", {}).values():
                     self.assertIn(choice["target"], targets)
+
+    def test_automatic_profiles_use_standalone_every_request_decisions(self):
+        for name in ("routes_custom.toml", "routes_openai.toml"):
+            with self.subTest(profile=name):
+                config = tomllib.loads((ROOT / name).read_text())
+                route = config["routes"]["stage"]
+                self.assertEqual(route["id"], "daedalus")
+                self.assertEqual(route["type"], "decision_api")
+                self.assertEqual(route["default_target"], "xhigh")
+                self.assertNotIn("stage", route)
+                self.assertEqual(route["classifier"]["classify_trigger"], "every_request")
+                self.assertEqual(route["classifier"]["max_input_tokens"], "auto")
+                self.assertTrue(route["classifier"]["truncate_input"])
+                self.assertEqual(set(route["classifier"]["choices"]), {
+                    "local", "instant", "low", "medium", "high", "xhigh", "max",
+                })
+                for choice in route["classifier"]["choices"].values():
+                    self.assertIn(choice["target"], config["targets"])
 
     def test_no_shared_session_identity_or_responses_only_fireworks_defaults(self):
         config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
@@ -89,18 +107,16 @@ class FireworksRoutesTest(unittest.TestCase):
             source = (ROOT / "routes_custom.toml").read_text()
             path.write_text(
                 source.replace(
-                    'type = "decision_api"',
-                    'type = "decision_api"\napi_key_env = "DECISION_API_KEY"',
+                    '[routes.stage.classifier]\ntype = "decision_api"',
+                    '[routes.stage.classifier]\ntype = "decision_api"\napi_key_env = "DECISION_API_KEY"',
                 )
             )
             self.assertEqual(
                 helper.api_key_environment_names(path),
-                [
-                    "DECISION_API_KEY",
-                    "FIREWORKS_API_KEY",
-                    "INCEPTION_API_KEY",
-                    "LOCAL_API_KEY",
-                ],
+                sorted({"DECISION_API_KEY"} | {
+                    client["api_key_env"] for client in tomllib.loads(source)["llm_clients"].values()
+                    if "api_key_env" in client
+                }),
             )
             path.write_text(
                 path.read_text().replace(

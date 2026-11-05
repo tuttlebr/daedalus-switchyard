@@ -105,6 +105,21 @@ class ContextWindows(unittest.TestCase):
             self.assertEqual(failure.exception.code, 401)
             failure.exception.close()
 
+    def test_standalone_decisions_include_all_choices_and_the_default(self):
+        route = {
+            "type": "decision_api", "default_target": "fallback", "context_window": 16384,
+            "classifier": {"type": "decision_api", "choices": {
+                "fast": {"target": "small"}, "private": {"target": "local"},
+            }},
+        }
+        config = {
+            "routes": {"auto": route},
+            "targets": {name: {} for name in ("fallback", "small", "local")},
+        }
+        self.assertEqual(probe.context_requirements(config), {
+            "fallback": 16384, "small": 16384, "local": 16384,
+        })
+
     def test_route_requirements_include_choices_fallbacks_and_subagents(self):
         config = {
             "targets": {name: {} for name in ("strong", "weak", "local", "worker", "judge")},
