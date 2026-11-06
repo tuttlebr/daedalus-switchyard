@@ -29,7 +29,8 @@ available. `routes_custom.toml.bk` is a backup, not a selectable Make variant.
 The Helm chart's embedded `config.routesToml` remains an older GLM 5.2
 `llm_classifier` example. The Makefile and deployment script override it with
 the selected file. Direct Helm use must also supply
-`--set-file config.routesToml=<routes file>` and the corresponding
+`--set-file config.routesToml=<rendered routes file>` (see
+[header environment variables](#header-environment-variables)) and the corresponding
 `apiKeySecret.keys` to reproduce either configuration above.
 
 ### Public model routes
@@ -95,14 +96,52 @@ Responses requests are translated to Chat Completions for Fireworks, including
 tool calls/results and reasoning history. OpenAI uses native Responses transport.
 Do not add the Responses-only `truncation` field to Fireworks target defaults.
 
-The custom client currently sets fixed `x-multi-turn-session-id` and
-`x-session-affinity` headers with the same value for all requests. This groups
+The custom client sets `x-multi-turn-session-id` and `x-session-affinity` from
+`${GLOBAL_SESSION_ID}`, resolved during validation/deployment from the caller's
+environment or `.env`. Both headers share the same value for all requests. This groups
 traffic under a shared provider affinity key. The OpenAI client has no configured
 extra headers. These are server-configured headers; inbound provider-affinity
 headers are not forwarded with server-owned credentials. The patched gateway
 preserves the standard `user` field through Responses-to-Chat translation and
 allowlists the caller's `x-request-id`. `x-switchyard-session-id` is separate
 routing state and is not required by the current standalone classifier.
+
+### Header environment variables
+
+`routes_custom.toml` uses:
+
+```toml
+extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-affinity = "${GLOBAL_SESSION_ID}" }
+```
+
+Set the non-secret shared ID in `.env` or the calling environment:
+
+```bash
+GLOBAL_SESSION_ID=your-shared-session-id
+```
+
+`make validate`, `make helm-lint`, `make helm-template`, and `make deploy` render
+`${NAME}` references only inside `llm_clients.*.extra_headers` values. Exported
+caller values take precedence over `.env`, including an explicitly empty value
+(which fails validation). Missing or empty variables, malformed references, and
+control characters in substituted values fail before Helm or cluster changes.
+Prompts, model names, credential references and other fields are not interpolated.
+Substitution is a single pass; variable contents are never evaluated as shell code.
+Existing literal headers continue to work.
+
+The source TOML remains a template. The rendered copy contains literal headers
+in the ConfigMap; these variables are not added to the API-key Secret or container
+environment. Changing the ID requires redeployment. The server itself does not
+expand placeholders, so direct Helm/server use must first render a copy:
+
+```bash
+bash scripts/render_routes.sh routes_custom.toml /tmp/switchyard-routes.toml
+```
+
+Use that output for `--set-file config.routesToml=...` or the server's `--config`.
+The wrapper loads the repository's `.env` with the same Bash syntax used by the
+deployment script. Its Python helper can also run directly with already-exported
+variables: `python3 scripts/render_routes.py SOURCE OUTPUT`.
 
 ## Automatic reasoning routing
 
@@ -198,6 +237,7 @@ profile supplies a local-processing privacy boundary.
 - `scripts/deploy.sh` and `scripts/deploy_state.py`: capability checks, deployment,
   backups and recovery.
 - `scripts/check_capabilities.py`: provider generation/tool and context checks.
+- `scripts/render_routes.sh` and `scripts/render_routes.py`: header environment loading and TOML rendering.
 - `scripts/test_routes.py`: live route smoke checks.
 - `scripts/test_decision_judge.py`: synthetic judge contract/policy probes.
 - `tests/`: configuration, deployment and HTTP fixture regressions.
@@ -223,7 +263,7 @@ make validate
 make validate ROUTES_FILE=routes_openai.toml
 ```
 
-This discovers credential names, lints the chart, renders the selected routes
+This resolves header variables, discovers credential names, lints the chart, renders the selected routes
 into the `daedalus` namespace, and runs Kubernetes client-side dry-run validation.
 It does not validate routing policy or prove provider compatibility.
 
@@ -291,6 +331,10 @@ ignored by Git. Caller environment values take precedence over `.env`; unrelated
 variables are ignored. Credentials become Kubernetes Secret keys, not Helm
 values or ConfigMap contents.
 
+The custom profile also requires `GLOBAL_SESSION_ID` for its shared affinity
+headers. `.env.example` includes this non-secret setting; keep the existing ID
+when migrating a deployment to preserve its affinity key.
+
 The currently available build/push/deploy targets are:
 
 ```bash
@@ -327,8 +371,9 @@ For an immutable image, pass `IMAGE_DIGEST=sha256:...` with the pushed manifest
 digest during deployment. Change release/Secret names only when intending to
 change those resource names.
 
-The script snapshots the selected TOML so validation, probing and deployment use
-the same contents. Before changing resources, the capability gate checks every
+The script snapshots the selected TOML and renders header variables once, so
+validation, probing and deployment use the same resolved contents even if the
+source file or `.env` changes during probing. Before changing resources, the capability gate checks every
 distinct provider/model/settings combination. Generation or tool failures block
 deployment. Missing or insufficient advertised context limits emit warnings;
 context lookup failures also warn. See the [capability gate](docs/capability-gate.md).

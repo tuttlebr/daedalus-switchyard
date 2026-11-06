@@ -45,17 +45,23 @@ test:
 		--timeout "$(TEST_TIMEOUT)" --max-output-tokens "$(TEST_MAX_OUTPUT_TOKENS)"
 
 helm-lint:
-	api_key_envs_json="$$(python3 scripts/list_api_key_envs.py --json $(ROUTES_FILE))"; \
+	@set -euo pipefail; \
+	routes_tmp_dir="$$(mktemp -d)"; trap 'rm -rf -- "$$routes_tmp_dir"' EXIT; \
+	bash scripts/render_routes.sh "$(ROUTES_FILE)" "$$routes_tmp_dir/routes.toml"; \
+	api_key_envs_json="$$(python3 scripts/list_api_key_envs.py --json "$$routes_tmp_dir/routes.toml")"; \
 	helm lint $(CHART_DIR) \
 		--set-json "apiKeySecret.keys=$${api_key_envs_json}" \
-		--set-file config.routesToml=$(ROUTES_FILE)
+		--set-file "config.routesToml=$$routes_tmp_dir/routes.toml"
 
 helm-template:
-	api_key_envs_json="$$(python3 scripts/list_api_key_envs.py --json $(ROUTES_FILE))"; \
+	@set -euo pipefail; \
+	routes_tmp_dir="$$(mktemp -d)"; trap 'rm -rf -- "$$routes_tmp_dir"' EXIT; \
+	bash scripts/render_routes.sh "$(ROUTES_FILE)" "$$routes_tmp_dir/routes.toml"; \
+	api_key_envs_json="$$(python3 scripts/list_api_key_envs.py --json "$$routes_tmp_dir/routes.toml")"; \
 	helm template switchyard $(CHART_DIR) \
 		--namespace daedalus \
 		--set-json "apiKeySecret.keys=$${api_key_envs_json}" \
-		--set-file config.routesToml=$(ROUTES_FILE) \
+		--set-file "config.routesToml=$$routes_tmp_dir/routes.toml" \
 		> /tmp/switchyard-rendered.yaml
 	kubectl apply --dry-run=client --validate=false -f /tmp/switchyard-rendered.yaml >/dev/null
 

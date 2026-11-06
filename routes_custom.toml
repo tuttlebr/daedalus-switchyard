@@ -4,7 +4,7 @@ schema_version = 1
 format = "openai_chat"
 base_url = "https://api.fireworks.ai/inference/v1"
 api_key_env = "FIREWORKS_API_KEY"
-extra_headers = { x-multi-turn-session-id = "agent_4201kws76rm3fgescz3cst711jp4", x-session-affinity = "agent_4201kws76rm3fgescz3cst711jp4" }
+extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-affinity = "${GLOBAL_SESSION_ID}" }
 
 [targets.max]
 id = "max"

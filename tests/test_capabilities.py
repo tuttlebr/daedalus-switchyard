@@ -599,7 +599,7 @@ class Capabilities(unittest.TestCase):
             root = Path(directory)
             (root / "scripts").mkdir()
             (root / "bin").mkdir()
-            for name in ("deploy.sh", "list_api_key_envs.py", "check_capabilities.py"):
+            for name in ("deploy.sh", "list_api_key_envs.py", "check_capabilities.py", "render_routes.py", "render_routes.sh"):
                 shutil.copy(
                     Path(__file__).parents[1] / "scripts" / name,
                     root / "scripts" / name,

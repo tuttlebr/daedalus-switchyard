@@ -225,14 +225,21 @@ class NetworkPolicyChart(unittest.TestCase):
 
 
 class DeployShell(unittest.TestCase):
-    def run_deploy(self, *, nodeport=True, failure="", namespace_exists=True):
+    def run_deploy(self, *, nodeport=True, failure="", namespace_exists=True,
+                   header_dotenv=None, header_override=None, header_placeholder=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
             (root / "bin").mkdir()
-            for name in ("deploy.sh", "list_api_key_envs.py"):
+            for name in ("deploy.sh", "list_api_key_envs.py", "render_routes.py", "render_routes.sh"):
                 shutil.copy(ROOT / "scripts" / name, root / "scripts" / name)
-            (root / "scripts/check_capabilities.py").write_text("pass\n")
+            (root / "scripts/check_capabilities.py").write_text(
+                "import json, os, pathlib, sys, tomllib\n"
+                "config = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())\n"
+                "with open(os.environ['CALL_LOG'], 'a') as log:\n"
+                "    log.write(json.dumps(['capability-config', config]) + '\\n')\n"
+                "(pathlib.Path(__file__).parents[1] / 'routes.toml').write_text('# edited during probe\\n')\n"
+            )
             (root / "scripts/deploy_state.py").write_text(
                 "import json, pathlib, sys\n"
                 "root = pathlib.Path(__file__).parents[1]\n"
@@ -242,12 +249,21 @@ class DeployShell(unittest.TestCase):
             )
             routes = root / "routes.toml"
             routes.write_text('[llm_clients.fixture]\nformat="openai_chat"\nbase_url="http://fixture"\n')
+            if header_placeholder:
+                with routes.open("a") as route_file:
+                    route_file.write('extra_headers = { x-session-affinity = "${GLOBAL_SESSION_ID}" }\n')
+            if header_dotenv is not None:
+                (root / ".env").write_text(f"GLOBAL_SESSION_ID={header_dotenv}\n")
             cli = """#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, tomllib
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ["CALL_LOG"], "a") as log:
     log.write(json.dumps([name, *args]) + "\\n")
+    for arg in args:
+        if arg.startswith('config.routesToml='):
+            config = tomllib.loads(pathlib.Path(arg.split('=', 1)[1]).read_text())
+            log.write(json.dumps(['helm-config', args[0], config]) + "\\n")
 if args == ["config", "current-context"]: print("fixture")
 if name == "kubectl" and "get" in args and "namespace" in args and os.environ["NS_EXISTS"] == "yes":
     print("namespace/daedalus")
@@ -264,16 +280,40 @@ if "--raw" in args:
                 path.write_text(cli)
                 path.chmod(0o755)
             calls = root / "calls"
+            environment = {key: value for key, value in os.environ.items() if key != "GLOBAL_SESSION_ID"}
+            if header_override is not None:
+                environment["GLOBAL_SESSION_ID"] = header_override
             result = subprocess.run(
                 ["bash", str(root / "scripts/deploy.sh")], capture_output=True, text=True,
-                env={**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
+                env={**environment, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
                      "CALL_LOG": str(calls), "FAILURE": failure,
                      "NS_EXISTS": "yes" if namespace_exists else "no",
                      "ROUTES_FILE": str(routes), "EXPECTED_CONTEXT": "fixture",
                      "IMAGE_REPOSITORY": "example.test/fixture"},
                 timeout=15,
             )
-            return result, calls.read_text()
+            return result, calls.read_text() if calls.exists() else ""
+
+    def test_rendered_snapshot_reaches_lint_gate_and_upgrade_despite_source_edit(self):
+        for override, expected in ((None, "from-dotenv"), ("from-caller", "from-caller")):
+            with self.subTest(override=override):
+                result, calls = self.run_deploy(header_placeholder=True, header_dotenv="from-dotenv",
+                                               header_override=override)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = [json.loads(line) for line in calls.splitlines()]
+                configurations = [line[-1] for line in lines if line[0] in ("helm-config", "capability-config")]
+                self.assertEqual(len(configurations), 4)  # lint, template, capability gate, upgrade
+                for config in configurations:
+                    self.assertEqual(config['llm_clients']['fixture']['extra_headers']['x-session-affinity'], expected)
+
+    def test_missing_or_empty_header_variable_stops_before_external_commands(self):
+        for dotenv, override in ((None, None), ("from-dotenv", "")):
+            with self.subTest(dotenv=dotenv, override=override):
+                result, calls = self.run_deploy(header_placeholder=True, header_dotenv=dotenv,
+                                               header_override=override)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("GLOBAL_SESSION_ID", result.stderr)
+                self.assertEqual(calls, "")
 
     def test_nodeport_deploy_uses_explicit_readiness_and_leaves_namespace_alone(self):
         result, calls = self.run_deploy()

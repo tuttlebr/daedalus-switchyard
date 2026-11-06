@@ -33,7 +33,9 @@ fi
 gate_snapshot_dir="$(mktemp -d)"
 readonly gate_snapshot_dir
 trap 'rm -rf -- "${gate_snapshot_dir}"' EXIT
-cp -- "${ROUTES_FILE}" "${gate_snapshot_dir}/routes.toml"
+cp -- "${ROUTES_FILE}" "${gate_snapshot_dir}/routes.source.toml"
+bash "${PROJECT_DIR}/scripts/render_routes.sh" \
+  "${gate_snapshot_dir}/routes.source.toml" "${gate_snapshot_dir}/routes.toml"
 ROUTES_FILE="${gate_snapshot_dir}/routes.toml"
 
 mapfile -t api_key_env_names < <(
