@@ -45,7 +45,7 @@ extra_body = { reasoning_effort = "low", context_length_exceeded_behavior = "tru
 [routes.stage]
 id = "daedalus"
 type = "decision_api"
-default_target = "medium"
+default_target = "xhigh"
 tool_calling = true
 reasoning = true
 
