@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-03",
+  "data": "Synthetic fixture only; no incident messages or tool output replayed to providers.",
+  "first_response": {
+    "requested_model": "daedalus/instant",
+    "opaque_reasoning_items": 1,
+    "encrypted_lengths": [
+      88
+    ],
+    "function_calls": 1
+  },
+  "same_history_continuations": {
+    "daedalus/instant": {
+      "status": 200,
+      "completed": true,
+      "returned_fixture_value_42": true
+    },
+    "daedalus/xhigh": {
+      "status": 400,
+      "error": "Fireworks Chat cannot represent structured reasoning details"
+    }
+  },
+  "scope": "Read-only service access via temporary port-forward, closed after the probe."
+}

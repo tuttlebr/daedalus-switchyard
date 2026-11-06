@@ -21,7 +21,7 @@ selection of `max`, `xhigh`, `high`, `medium`, `low`, `instant`, and `local`.
 Sensitive work (including reading, summarizing, or replying to email) prefers
 `local` before considering difficulty. Greetings and simple social exchanges
 use `instant`; routine synthesis uses `medium`. The custom configuration uses
-Fireworks, Inception and local Dynamo; the OpenAI configuration uses OpenAI and
+Fireworks and local Dynamo; the OpenAI configuration uses OpenAI and
 the local Dynamo endpoint. Both retain explicit `daedalus/<profile>` routes.
 
 This is a classifier preference, not a local-only privacy guarantee: the local
@@ -551,8 +551,9 @@ ConfigMap.
 
 Before changing the release, the deployment capability gate probes every target.
 It also reports the endpoint's advertised `context_window` from its model catalog.
-If a route declares `context_window`, every completion target it can select must
-advertise at least that many tokens; a smaller or unknown limit stops deployment.
+If a route declares `context_window`, a smaller or unknown advertised limit emits
+a warning and deployment continues. Context metadata lookup failures also warn;
+generation and tool checks still block deployment on failure.
 Without a declaration, missing metadata is reported as unknown. See the
 [capability gate](docs/capability-gate.md) for supported metadata fields and details.
 Both local-containing configurations use the shared Dynamo gateway's internal

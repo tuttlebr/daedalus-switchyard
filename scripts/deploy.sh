@@ -128,8 +128,8 @@ helm template "${RELEASE_NAME}" "${CHART_DIR}" \
   --namespace "${NAMESPACE}" "${helm_validation_args[@]}" >"${gate_snapshot_dir}/manifest.yaml"
 
 # A listed model and a healthy pod do not prove generation or tool support.
-# Check advertised context limits against route declarations in the same gate.
-# Run before any namespace/Secret/release mutation; a failure leaves live routes intact.
+# Warn about advertised context limits that do not meet route declarations.
+# Run before any namespace/Secret/release mutation; a generation/tool failure leaves live routes intact.
 python3 "${PROJECT_DIR}/scripts/check_capabilities.py" "${ROUTES_FILE}" \
   --timeout "${CAPABILITY_TIMEOUT:-60}" \
   --max-output-tokens "${CAPABILITY_MAX_OUTPUT_TOKENS:-4096}"

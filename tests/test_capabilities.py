@@ -105,21 +105,6 @@ class ContextWindows(unittest.TestCase):
             self.assertEqual(failure.exception.code, 401)
             failure.exception.close()
 
-    def test_standalone_decisions_include_all_choices_and_the_default(self):
-        route = {
-            "type": "decision_api", "default_target": "fallback", "context_window": 16384,
-            "classifier": {"type": "decision_api", "choices": {
-                "fast": {"target": "small"}, "private": {"target": "local"},
-            }},
-        }
-        config = {
-            "routes": {"auto": route},
-            "targets": {name: {} for name in ("fallback", "small", "local")},
-        }
-        self.assertEqual(probe.context_requirements(config), {
-            "fallback": 16384, "small": 16384, "local": 16384,
-        })
-
     def test_route_requirements_include_choices_fallbacks_and_subagents(self):
         config = {
             "targets": {name: {} for name in ("strong", "weak", "local", "worker", "judge")},
@@ -144,8 +129,23 @@ class ContextWindows(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(probe.CheckFailed, "invalid_context_window"):
                 probe.context_requirements(config)
 
-    def test_gate_reports_limits_and_enforces_declarations_before_generation(self):
-        for advertised, required, expected_error in (
+    def test_standalone_decisions_include_all_choices_and_the_default(self):
+        route = {
+            "type": "decision_api", "default_target": "fallback", "context_window": 16384,
+            "classifier": {"type": "decision_api", "choices": {
+                "fast": {"target": "small"}, "private": {"target": "local"},
+            }},
+        }
+        config = {
+            "routes": {"auto": route},
+            "targets": {name: {} for name in ("fallback", "small", "local")},
+        }
+        self.assertEqual(probe.context_requirements(config), {
+            "fallback": 16384, "small": 16384, "local": 16384,
+        })
+
+    def test_context_warnings_allow_generation_and_pass_the_gate(self):
+        for advertised, required, expected_warning in (
             (32768, None, None),
             (32768, 16384, None),
             (32768, 32768, None),
@@ -167,19 +167,59 @@ class ContextWindows(unittest.TestCase):
                 )
                 with patch.object(sys, "argv", ["probe", str(routes), "--report", str(report)]), patch.object(
                     probe, "check_target", return_value={"checks": ["text"]}
-                ) as generation, redirect_stdout(io.StringIO()):
+                ) as generation, redirect_stdout(io.StringIO()) as output:
                     exit_code = probe.main()
                 data = json.loads(report.read_text())
                 row = data["targets"][0]
-                self.assertEqual(exit_code, 1 if expected_error else 0)
-                self.assertEqual(data["passed"], not bool(expected_error))
+                self.assertEqual(exit_code, 0)
+                self.assertTrue(data["passed"])
+                self.assertTrue(row["passed"])
                 self.assertEqual(row["context_window"], advertised)
                 self.assertEqual(row["required_context_window"], required)
                 self.assertEqual(row["context_window_status"], "unknown" if advertised is None else "reported")
-                self.assertEqual(row.get("error"), expected_error)
-                self.assertEqual(generation.call_count, 0 if expected_error else 1)
-                if not expected_error:
-                    self.assertEqual("context_window" in row["checks"], advertised is not None)
+                self.assertNotIn("error", row)
+                self.assertEqual(row.get("warning"), expected_warning)
+                self.assertEqual(json.loads(output.getvalue()), row)
+                generation.assert_called_once()
+                self.assertEqual("context_window" in row["checks"], advertised is not None and not expected_warning)
+
+    def test_metadata_failures_warn_without_masking_generation_failures(self):
+        for metadata_error, warning in (
+            (probe.CheckFailed("invalid_context_window_metadata"), "invalid_context_window_metadata"),
+            (probe.HTTPError("http://fixture", 401, "sensitive details", {}, None), "http_401"),
+            (TimeoutError("sensitive details"), "TimeoutError"),
+        ):
+            for generation_fails in (False, True):
+                with (
+                    self.subTest(warning=warning, generation_fails=generation_fails),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    routes = Path(directory) / "routes.toml"
+                    report = Path(directory) / "report.json"
+                    routes.write_text(
+                        '[llm_clients.fixture]\nformat="openai_chat"\nbase_url="http://fixture"\n'
+                        '[targets.low]\nmodel="fixture"\nllm_client="fixture"\n'
+                        '[routes.low]\ntype="passthrough"\ntarget="low"\ncontext_window=32768\n'
+                    )
+                    with patch.object(sys, "argv", ["probe", str(routes), "--report", str(report)]), patch.object(
+                        probe, "discover_context_window", side_effect=metadata_error
+                    ), patch.object(
+                        probe, "check_target", return_value={"checks": ["text"]},
+                        side_effect=probe.CheckFailed("missing_terminal") if generation_fails else None,
+                    ) as generation, redirect_stdout(io.StringIO()) as output:
+                        self.assertEqual(probe.main(), 1 if generation_fails else 0)
+                    data = json.loads(report.read_text())
+                    row = data["targets"][0]
+                    self.assertEqual(data["passed"], not generation_fails)
+                    self.assertEqual(row["passed"], not generation_fails)
+                    self.assertEqual(row["warning"], warning)
+                    self.assertEqual(row.get("error"), "missing_terminal" if generation_fails else None)
+                    self.assertIsNone(row["context_window"])
+                    self.assertEqual(row["context_window_status"], "unknown")
+                    self.assertNotIn("context_window", row.get("checks", []))
+                    self.assertEqual(json.loads(output.getvalue()), row)
+                    self.assertNotIn("sensitive details", report.read_text() + output.getvalue())
+                    generation.assert_called_once()
 
     def test_duplicate_targets_cannot_hide_a_stricter_route_requirement(self):
         with model_catalog({"data": [{"id": "fixture", "context_length": 32768}]}) as peer:
@@ -197,10 +237,11 @@ class ContextWindows(unittest.TestCase):
                 with patch.object(sys, "argv", ["probe", str(routes), "--report", str(report)]), patch.object(
                     probe, "check_target", return_value={"checks": ["text"]}
                 ), redirect_stdout(io.StringIO()):
-                    self.assertEqual(probe.main(), 1)
+                    self.assertEqual(probe.main(), 0)
                 rows = json.loads(report.read_text())["targets"]
-                self.assertEqual([row["passed"] for row in rows], [True, False])
-                self.assertEqual(rows[1]["error"], "context_window_too_small")
+                self.assertEqual([row["passed"] for row in rows], [True, True])
+                self.assertNotIn("warning", rows[0])
+                self.assertEqual(rows[1]["warning"], "context_window_too_small")
                 self.assertEqual(len(peer.requests), 1)
 
 
@@ -549,7 +590,8 @@ class Capabilities(unittest.TestCase):
 
     def test_failed_gate_leaves_release_and_secrets_unchanged(self):
         with model_catalog({"data": [{"id": "fixture", "context_length": 32768}]}) as peer:
-            self.failed_deployment(peer.client["base_url"], "context_window_too_small", "context_window=65536\n")
+            # The context warning must not suppress a generation failure (POST is unsupported).
+            self.failed_deployment(peer.client["base_url"], "http_501", "context_window=65536\n")
         self.failed_deployment("http://127.0.0.1:1/v1", "URLError")
 
     def failed_deployment(self, base_url, error, declaration=""):

@@ -1,0 +1,234 @@
+[
+  {
+    "parser": "MuseGlimmerToolParser",
+    "stream": true,
+    "tokens_per_chunk": 1,
+    "markers": [],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-87b303f2c79b5d76",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "to=probe_read<atem:function_calls>\n",
+    "finish_reason": "tool_calls",
+    "passed": false
+  },
+  {
+    "parser": "MuseGlimmerToolParser",
+    "stream": true,
+    "tokens_per_chunk": 15,
+    "markers": [],
+    "tool_calls": [],
+    "content": "to=probe_read<atem:function_calls>\n<atem:invoke name=\"probe",
+    "finish_reason": "stop",
+    "passed": false
+  },
+  {
+    "parser": "MuseGlimmerToolParser",
+    "stream": true,
+    "tokens_per_chunk": 57,
+    "markers": [],
+    "tool_calls": [],
+    "content": "to=probe_read<atem:function_calls>\n<atem:invoke name=\"probe_read\">\n<atem:parameter name=\"key\">probe</atem:parameter>\n</atem:invoke>\n</atem:function_calls>",
+    "finish_reason": "stop",
+    "passed": false
+  },
+  {
+    "parser": "MuseGlimmerToolParser",
+    "stream": false,
+    "tokens_per_chunk": 1,
+    "markers": [],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-aba75fc6e6e695cf",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MuseGlimmerToolParser",
+    "stream": false,
+    "tokens_per_chunk": 15,
+    "markers": [],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-b13360018a127690",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MuseGlimmerToolParser",
+    "stream": false,
+    "tokens_per_chunk": 57,
+    "markers": [],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-968b5845c3a22e53",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MarkerAwareMuseParser",
+    "stream": true,
+    "tokens_per_chunk": 1,
+    "markers": [
+      "<atem:function_calls>"
+    ],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-91c9c4fecd013e68",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MarkerAwareMuseParser",
+    "stream": true,
+    "tokens_per_chunk": 15,
+    "markers": [
+      "<atem:function_calls>"
+    ],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-86276ed798c48eb1",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MarkerAwareMuseParser",
+    "stream": true,
+    "tokens_per_chunk": 57,
+    "markers": [
+      "<atem:function_calls>"
+    ],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-91f223dc54092f7d",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MarkerAwareMuseParser",
+    "stream": false,
+    "tokens_per_chunk": 1,
+    "markers": [
+      "<atem:function_calls>"
+    ],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-a4aef4affa730e63",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MarkerAwareMuseParser",
+    "stream": false,
+    "tokens_per_chunk": 15,
+    "markers": [
+      "<atem:function_calls>"
+    ],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-80fd8d703a021f1e",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  },
+  {
+    "parser": "MarkerAwareMuseParser",
+    "stream": false,
+    "tokens_per_chunk": 57,
+    "markers": [
+      "<atem:function_calls>"
+    ],
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-a26e0ba76353c282",
+        "type": "function",
+        "index": 0,
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "content": "",
+    "finish_reason": "tool_calls",
+    "passed": true
+  }
+]

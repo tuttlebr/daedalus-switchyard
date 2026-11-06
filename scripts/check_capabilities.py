@@ -598,27 +598,34 @@ def main():
             "api": client["format"],
             "settings_sha256": hashlib.sha256(identity.encode()).hexdigest(),
             "required_context_window": required_window,
+            "context_window": None,
+            "context_window_field": None,
+            "context_window_status": "unknown",
         }
         started = time.monotonic()
         try:
             with reachable_client(client) as reachable:
-                # Share discovery across reasoning profiles, only within this run.
-                context_key = json.dumps([client, target["model"]], sort_keys=True)
-                if context_key not in context_cache:
-                    context_cache[context_key] = discover_context_window(
-                        reachable, target["model"], timeout=args.timeout
+                # Context metadata is advisory; always run the generation/tool checks.
+                try:
+                    # Share discovery across reasoning profiles, only within this run.
+                    context_key = json.dumps([client, target["model"]], sort_keys=True)
+                    if context_key not in context_cache:
+                        context_cache[context_key] = discover_context_window(
+                            reachable, target["model"], timeout=args.timeout
+                        )
+                    context = context_cache[context_key]
+                    row.update(
+                        context_window=context.tokens,
+                        context_window_field=context.field,
+                        context_window_status="reported" if context.tokens is not None else "unknown",
                     )
-                context = context_cache[context_key]
-                row.update(
-                    context_window=context.tokens,
-                    context_window_field=context.field,
-                    context_window_status="reported" if context.tokens is not None else "unknown",
-                )
-                if context.reason:
-                    row["context_window_reason"] = context.reason
-                if required_window is not None:
-                    require(context.tokens is not None, "context_window_unknown")
-                    require(context.tokens >= required_window, "context_window_too_small")
+                    if context.reason:
+                        row["context_window_reason"] = context.reason
+                    if required_window is not None:
+                        require(context.tokens is not None, "context_window_unknown")
+                        require(context.tokens >= required_window, "context_window_too_small")
+                except Exception as error:
+                    row["warning"] = error_code(error)
                 row.update(
                     check_target(
                         reachable,
@@ -628,7 +635,7 @@ def main():
                     ),
                     passed=True,
                 )
-                if context.tokens is not None:
+                if row["context_window"] is not None and "warning" not in row:
                     row["checks"].append("context_window")
         except Exception as error:
             row.update(passed=False, error=error_code(error), error_message=failure_message(error))

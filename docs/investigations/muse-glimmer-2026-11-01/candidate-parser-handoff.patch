@@ -1,0 +1,16 @@
+--- a/vllm/tool_parsers/muse_glimmer_tool_parser.py
++++ b/vllm/tool_parsers/muse_glimmer_tool_parser.py
+@@ -180,6 +180,13 @@
+ 
+ 
+ class MuseGlimmerToolParser(ToolParser):
++    # Dynamo's reasoning-to-tool handoff discovers this attribute. Keep the
++    # complete ATEM block buffered until finish_reason, so the handoff chunk
++    # cannot leak as content or be lost before the tool parser consumes it.
++    # Do not add an end marker: early buffer flushing in Dynamo 1.6.1 can
++    # replay stale text and emit a duplicate tool call on single-token chunks.
++    tool_call_start_token = "<atem:function_calls>"
++
+     # MuseGlimmer emits ATEM markup around tool-call arguments. The generic
+     # named/required tool_choice path in vllm/parser/abstract_parser.py assigns
+     # the raw model text straight to FunctionCall.arguments, which leaks that

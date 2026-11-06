@@ -2,7 +2,8 @@
 
 `scripts/deploy.sh` snapshots the selected routes file and checks every distinct
 provider/model/settings combination before changing Kubernetes Secrets or the
-Helm release. A failed check exits unsuccessfully and preserves the active route.
+Helm release. A failed generation or tool check exits unsuccessfully and preserves
+the active route. Context-window checks are advisory and do not block deployment.
 The same snapshot is used for validation and deployment.
 
 The gate also reads each target's `/models` catalog and reports its advertised
@@ -12,10 +13,11 @@ fields. If multiple limits are present, it uses the smallest, so a serving cap
 takes precedence over a larger model limit. Discovery is cached per client/model
 for the duration of the check, across reasoning profiles.
 
-An optional `context_window` on a `[routes.<name>]` table is a required minimum
+An optional `context_window` on a `[routes.<name>]` table is an expected minimum
 for every completion target reachable through that route, including classifier
-choices, fallback targets and subagents. The gate rejects a smaller advertised
-limit with `context_window_too_small`. For example:
+choices, fallback targets and subagents. The gate warns about a smaller advertised
+limit with `context_window_too_small` and continues generation and tool checks.
+For example:
 
 ```toml
 [routes.local]
@@ -27,9 +29,12 @@ context_window = 32768
 
 A missing model, missing limit, or unsupported `/models` endpoint (HTTP 404,
 405 or 501) is reported as `context_window: null` with status `unknown` and a
-reason. It does not block an undeclared window, but a declared window that cannot
-be verified fails with `context_window_unknown`. Malformed metadata and other
-HTTP failures fail the gate. This reads provider metadata; it does not send a
+reason. An undeclared window needs no warning, but a declared window that cannot
+be verified warns with `context_window_unknown`. Malformed metadata and other
+metadata lookup failures also produce sanitized warnings. These appear in the
+target's `warning` field in console output and the JSON report; they do not set
+`passed` to false or cause an unsuccessful exit. Invalid route declarations still
+fail configuration validation. This reads provider metadata; it does not send a
 full-window prompt, prove long-context quality, or change route declarations.
 
 Each target must stream a completed text response, select a synthetic tool both
@@ -83,7 +88,7 @@ response bodies. A successful synthetic probe cannot establish what happened
 in an earlier failed request whose stream was not recorded.
 
 Report version 2 adds context-window results; `checks` includes `context_window`
-only when a limit was found. It omits keys and response
+only when a limit was found and meets any declared minimum. It omits keys and response
 content. No automatic provider fallback or mutation replay is introduced.
 
 This proves upstream behavior for the tested requests. Validate gateway route

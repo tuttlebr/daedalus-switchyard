@@ -1,0 +1,64 @@
+[
+  {
+    "case": "frontend-auto-stream",
+    "content": "to=probe_read<atem:function_calls>\n<",
+    "tool_call_chunks": [],
+    "finish_reasons": [
+      "stop"
+    ]
+  },
+  {
+    "case": "frontend-forced-stream",
+    "content": "to=probe_read<atem:function_calls>\n<atem:invoke name=\"probe_read\">\n<atem:",
+    "tool_call_chunks": [],
+    "finish_reasons": [
+      "stop"
+    ]
+  },
+  {
+    "case": "gateway-auto-stream",
+    "content": "to=probe_read<atem:function_calls>\n<atem:invoke name=\"probe_read\">\n<atem:parameter name",
+    "tool_call_chunks": [],
+    "finish_reasons": [
+      "stop"
+    ]
+  },
+  {
+    "case": "gateway-forced-stream",
+    "content": "to=probe_read<atem:function_calls>\n<atem:invoke name=\"probe_read\">\n<atem:parameter",
+    "tool_call_chunks": [],
+    "finish_reasons": [
+      "stop"
+    ]
+  },
+  {
+    "case": "frontend-auto-buffered",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-85b491763bb49325",
+        "type": "function",
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "finish_reason": "tool_calls"
+  },
+  {
+    "case": "gateway-auto-buffered",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "chatcmpl-tool-962c7a10de36419d",
+        "type": "function",
+        "function": {
+          "name": "probe_read",
+          "arguments": "{\"key\": \"probe\"}"
+        }
+      }
+    ],
+    "finish_reason": "tool_calls"
+  }
+]
