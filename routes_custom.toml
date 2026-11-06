@@ -8,31 +8,31 @@ extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-af
 
 [targets.max]
 id = "max"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/models/kimi-k3p1-pro"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "max", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
+extra_body = { reasoning_effort = "xhigh", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
 
 [targets.xhigh]
 id = "xhigh"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "xhigh", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
 
 [targets.high]
 id = "high"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "high", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
 
 [targets.medium]
 id = "medium"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "medium", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
 
 [targets.low]
 id = "low"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/routers/glm-5p3-fast"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "low", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
 
@@ -40,7 +40,7 @@ extra_body = { reasoning_effort = "low", context_length_exceeded_behavior = "tru
 id = "instant"
 model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "low", context_length_exceeded_behavior = "truncate", reasoning_history = "disabled", stream = true }
+extra_body = { reasoning_effort = "high", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
 # ------------------------------------------------------------------------------
 [routes.stage]
 id = "daedalus"
@@ -67,11 +67,11 @@ latest user request, recent context, available tools, remaining dependencies and
 required validation. Judge the next unit of work by its reasoning difficulty
 and latency needs, not prompt length, output length or the name of a task.
 
-All answering profiles use llm_clients.fireworks and DeepSeek V4.1 Flash 1017:
+All answering profiles use llm_clients.fireworks:
 - low, medium, high, xhigh and max use
-  accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast with reasoning_effort
+  accounts/fireworks/models/kimi-k3p1-pro with reasoning_effort
   matching the profile name.
-- instant uses accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast
+- instant uses accounts/fireworks/models/kimi-k3p1-pro
   with reasoning_effort = high. It is a latency-oriented profile with reasoning
   and tool use, not a no-reasoning mode or a social-only model.
 The judge, accounts/fireworks/routers/rune, classifies requests; it is not an
@@ -126,7 +126,7 @@ The intended task or required deliverable cannot be identified reliably from
 the available context, so its routing profile cannot be classified. Do not use
 uncertain merely because a known task needs research, tools or verification.
 Uncertain, below-threshold decisions and classifier failures use default_target
-= instant: the Fireworks DeepSeek ultrafast router at high reasoning effort.
+= instant: the model router at high reasoning effort.
 This fallback is not private or local and does not authorize actions, disclosure
 or invented evidence.
 """
@@ -137,8 +137,8 @@ min_probability = 0.90
 criteria = """
 Greetings, thanks and acknowledgments, or latency-sensitive, bounded work with
 clear success criteria: routine explanations, short summaries, straightforward
-implementation and predictable tool calls. This profile uses the DeepSeek
-ultrafast router at high reasoning effort, so it can reason and use tools.
+implementation and predictable tool calls. This profile uses the model
+router at high reasoning effort, so it can reason and use tools.
 A greeting attached to a substantive task must be judged by that task. Prefer
 low for mechanical work needing only low effort and medium for ordinary agentic
 work without a special latency requirement. Hard debugging, long adaptive
