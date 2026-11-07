@@ -215,7 +215,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                 source = source.replace('model = "auto"', 'model = "Cloudflare/clef-flash"')
                 # These legacy Clef fixtures do not implement Elephant tokenization.
                 source = source.replace('max_input_tokens = "auto"', 'max_input_tokens = 16384')
-                source = source.replace('truncate_input = true', 'truncate_input = false\nmax_request_bytes = 65536')
+                source = source.replace('truncate_input = true', 'truncate_input = false')
                 # These transport tests exercise the original same-provider
                 # effort contract, independently of editable production maps.
                 for target in ("max", "xhigh", "high", "medium", "low", "instant"):
@@ -230,11 +230,6 @@ class FireworksChatTransportTest(unittest.TestCase):
                     source = re.sub(
                         rf'(?ms)^\[targets\.{target}\]\n.*?(?=^\[|\Z)', fixture_target, source
                     )
-                source = re.sub(
-                    r'(?ms)^\[routes\.none\]\n.*?(?=^\[|\Z)',
-                    '[routes.none]\nid = "daedalus/none"\ntype = "passthrough"\n'
-                    'target = "low"\ntool_calling = true\nreasoning = true\n\n', source,
-                )
                 if composite != "standalone":
                     # Legacy algorithm tests keep their original Composite configuration.
                     source = source.replace('type = "decision_api"\n# Failure', 'type = "composite"\n# Failure', 1)
@@ -356,10 +351,11 @@ class FireworksChatTransportTest(unittest.TestCase):
                     provider_url, f"http://127.0.0.1:{upstream.server_port}/v1"
                 )
                 # Exercise local selection without contacting the real LAN service.
-                source = source.replace(
-                    config["llm_clients"]["local"]["base_url"],
-                    f"http://127.0.0.1:{upstream.server_port}/v1",
-                )
+                if "local" in config["llm_clients"]:
+                    source = source.replace(
+                        config["llm_clients"]["local"]["base_url"],
+                        f"http://127.0.0.1:{upstream.server_port}/v1",
+                    )
                 path = Path(directory) / "routes.toml"
                 path.write_text(source)
                 with socket.socket() as sock:
@@ -638,8 +634,10 @@ class FireworksChatTransportTest(unittest.TestCase):
             )
 
     def test_conversation_affinity_survives_translation_without_static_headers(self):
-        with self.router() as (url, captured, _config):
-            for route in ("daedalus", "daedalus/deep"):
+        with self.router(source_transform=lambda source: re.sub(
+            r"(?m)^extra_headers = .*\n", "", source
+        )) as (url, captured, _config):
+            for route in ("daedalus", "daedalus/high"):
                 for stream in (False, True):
                     for key in ("a" * 64, "b" * 64, "a" * 64):
                         self.request(url, model=route, user=key, stream=stream)
@@ -1277,17 +1275,6 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(request["questions"], expected["questions"])
                 self.assertEqual(request["model"], expected["model"])
 
-    def test_none_alias_keeps_low_effort_and_in_turn_history(self):
-        with self.router() as (url, captured, config):
-            headers = self.request(url, model="daedalus/none")
-            _, body, _ = captured.get(timeout=5)
-            self.assertEqual(headers["x-model-router-selected-model"], "low")
-            self.assertEqual(body["reasoning_effort"], "low")
-            self.assertEqual(
-                body["reasoning_history"],
-                config["targets"]["low"]["extra_body"]["reasoning_history"],
-            )
-
     @staticmethod
     def target_verdict(choice, probability=0.96):
         config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
@@ -1642,9 +1629,10 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(path, "/v1/systemone")
                 self.assertTrue(captured.empty())
 
-    def test_deep_alias_matches_the_deployed_agent_profile(self):
+    def test_retired_agent_aliases_never_reach_the_provider(self):
         with self.router() as (url, captured, _config):
-            headers = self.request(url, model="daedalus/deep")
-            _, body, _ = captured.get(timeout=5)
-            self.assertEqual(headers["x-model-router-selected-model"], "xhigh")
-            self.assertEqual(body["reasoning_effort"], "xhigh")
+            for profile in ("default", "deep", "deep_max", "none"):
+                with self.subTest(profile=profile), self.assertRaises(HTTPError) as error:
+                    self.request(url, model="daedalus/" + profile)
+                self.assertIn(error.exception.code, (400, 404))
+                self.assertTrue(captured.empty())

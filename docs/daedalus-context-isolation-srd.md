@@ -22,7 +22,7 @@ The current implementation creates several obstacles:
 
 1. The agent builds model requests from a shared history using `request.chat_history = history.clone()` in `builder/runtime/src/agent.rs`. Changing the model carries earlier private messages and tool results to the new destination.
 2. Switchyard's current classifier policy assigns non-sensitive daily summaries at least `xhigh` for the entire task. The named-target patch retains the selected task target even for efficient stage decisions. An initial `xhigh` choice therefore prevents routine steps from dropping to a cheaper target.
-3. The Daedalus workflow maps daily-summary requests and skill loads to the `deep` profile. Its effective model alias must be reconciled with the new workflow policy; it must not silently override individual task routing.
+3. The Daedalus workflow leaves effort selection to the automatic `daedalus` route when `model_profile` is omitted. Explicit canonical effort levels remain fixed; retired `default`, `deep`, `deep_max`, and `none` profiles are rejected. Task routing must preserve that explicit intent.
 4. The skill reads Gmail, Calendar, and potentially personal health memory early. A public-news step later in the same history can still contain private information.
 5. Current Composite fallback can move a `local` selection to a cloud capable target. Local selection is currently a preference, not an enforced destination restriction.
 
@@ -202,7 +202,7 @@ The runtime creates policy fields and resolves inputs. The model may propose an 
 | Request preparation and agent loop | Daedalus runtime | Separate coordinator history from worker contexts; enforce provenance, lifecycle, and shared budgets |
 | Tool dispatch and stored results | Daedalus runtime | Attach trusted classification and provenance; restrict worker access and outbound arguments |
 | Provider adapter | Daedalus runtime | Separate session identities; convey trusted policy; enforce compatible retry behavior |
-| Routing configuration | Daedalus and Switchyard | Reconcile `deep` mappings and whole-task minimums with bounded task selection |
+| Routing configuration | Daedalus and Switchyard | Preserve explicit canonical effort choices and automatic routing during bounded task selection |
 | Gateway selection and transport | Switchyard | Enforce eligible destinations at classification and every provider attempt |
 | Daily-summary integration | Daedalus runtime | Add phase boundaries and local composition while preserving the skill's output and source contracts |
 | Validation and telemetry | Both teams | Test complete request paths and report quality, privacy, cost, and latency |

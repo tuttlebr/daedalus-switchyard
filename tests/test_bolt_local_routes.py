@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -10,7 +9,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ("routes_openai.toml", "routes_custom.toml")
-ALIASES = ("daedalus/local", "daedalus/none", "daedalus/hindsight-local")
+ALIASES = ("daedalus/local", "daedalus/hindsight-local")
 BOLT_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 GATEWAY_URL = (
     "http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1"
@@ -61,20 +60,19 @@ class BoltLocalRoutesTest(unittest.TestCase):
                     type(local["extra_body"]["nvext"]["max_thinking_tokens"]), int
                 )
                 self.assertNotIn("reasoning_effort", local["extra_body"])
-                for alias in ("daedalus/none", "daedalus/hindsight-local"):
+                for alias in ("daedalus/hindsight-local",):
                     _, target, _ = resolved(config, alias)
                     self.assertEqual(
                         target["extra_body"],
                         {"chat_template_kwargs": {"enable_thinking": False}},
                     )
 
-    def test_none_is_local_even_when_openai_instant_target_changes(self):
-        config = tomllib.loads((ROOT / "routes_openai.toml").read_text())
-        config["targets"]["instant"]["model"] = "unrelated-cloud-model"
-        route, target, client = resolved(config, "daedalus/none")
-        self.assertEqual(route["target"], "none")
-        self.assertEqual(target["model"], BOLT_MODEL)
-        self.assertEqual(client["base_url"], GATEWAY_URL)
+    def test_retired_none_route_is_absent_from_both_profiles(self):
+        for profile in PROFILES:
+            config = tomllib.loads((ROOT / profile).read_text())
+            with self.subTest(profile=profile):
+                self.assertNotIn("none", config["targets"])
+                self.assertNotIn("daedalus/none", {r["id"] for r in config["routes"].values()})
 
 
 @unittest.skipUnless(
@@ -85,14 +83,7 @@ class BoltLocalWireTest(unittest.TestCase):
     def router(self):
         from test_fireworks_chat_transport import FireworksChatTransportTest
 
-        def preserve_local_none(source):
-            # Restore /none after the shared legacy cloud fixture rewrites it.
-            # The fixture subsequently replaces the local client with loopback.
-            return re.sub(
-                r'(?ms)(^\[routes\.none\]\n.*?target = ")low(")', r"\g<1>none\2", source
-            )
-
-        return FireworksChatTransportTest().router(source_transform=preserve_local_none)
+        return FireworksChatTransportTest().router()
 
     def request(self, base, alias, api="chat", **extra):
         body = {"model": alias, "stream": True}
@@ -139,7 +130,7 @@ class BoltLocalWireTest(unittest.TestCase):
     def test_nonthinking_chat_and_responses_aliases_share_bolt_without_budget(self):
         with self.router() as (base, captured, _):
             for api in ("chat", "responses"):
-                for alias in ("daedalus/none", "daedalus/hindsight-local"):
+                for alias in ("daedalus/hindsight-local",):
                     with self.subTest(api=api, alias=alias):
                         self.request(base, alias, api)
                         path, body, _ = captured.get(timeout=3)
@@ -157,7 +148,7 @@ class BoltLocalWireTest(unittest.TestCase):
             _, body, _ = captured.get(timeout=3)
             self.assertEqual(body["nvext"], {"max_thinking_tokens": 1024})
 
-    def test_none_preserves_synthetic_image_input_on_local_chat_path(self):
+    def test_hindsight_preserves_synthetic_image_input_on_local_chat_path(self):
         image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
         content = [
             {"type": "text", "text": "Synthetic image transport only."},
@@ -165,7 +156,7 @@ class BoltLocalWireTest(unittest.TestCase):
         ]
         with self.router() as (base, captured, _):
             self.request(
-                base, "daedalus/none", messages=[{"role": "user", "content": content}]
+                base, "daedalus/hindsight-local", messages=[{"role": "user", "content": content}]
             )
             _, body, _ = captured.get(timeout=3)
             self.assertEqual(body["model"], BOLT_MODEL)
