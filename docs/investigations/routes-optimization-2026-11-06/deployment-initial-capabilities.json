@@ -1,0 +1,134 @@
+[
+  {
+    "target": "max",
+    "model": "accounts/fireworks/models/kimi-k3p1-pro",
+    "api": "openai_chat",
+    "settings_sha256": "97c3b1274881ff644f77c68ec78f933c70cef3fd507b2cdc4e49a083a2572f0f",
+    "required_context_window": 1048576,
+    "context_window": 1048576,
+    "context_window_field": "context_length",
+    "context_window_status": "reported",
+    "checks": [
+      "text",
+      "automatic_tool_roundtrip",
+      "forced_tool_roundtrip",
+      "context_window"
+    ],
+    "reported_models": [
+      "accounts/fireworks/models/kimi-k3p1-pro"
+    ],
+    "unknown_model_responses": 0,
+    "passed": true,
+    "elapsed_seconds": 10.68
+  },
+  {
+    "target": "xhigh",
+    "model": "accounts/fireworks/models/kimi-k3p1-pro",
+    "api": "openai_chat",
+    "settings_sha256": "d341236efc08dffbcf81d86591ee48d7b6cb122b663a8d2d545144d87ce2ff82",
+    "required_context_window": 1048576,
+    "context_window": 1048576,
+    "context_window_field": "context_length",
+    "context_window_status": "reported",
+    "checks": [
+      "text",
+      "automatic_tool_roundtrip",
+      "forced_tool_roundtrip",
+      "context_window"
+    ],
+    "reported_models": [
+      "accounts/fireworks/models/kimi-k3p1-pro"
+    ],
+    "unknown_model_responses": 0,
+    "passed": true,
+    "elapsed_seconds": 8.48
+  },
+  {
+    "target": "high",
+    "model": "accounts/fireworks/models/kimi-k3p1-pro",
+    "api": "openai_chat",
+    "settings_sha256": "2156c4a179d1b96f5ee02e2f341732cdd4e1ba13cc0e23913423feaf43384ff7",
+    "required_context_window": 1048576,
+    "context_window": 1048576,
+    "context_window_field": "context_length",
+    "context_window_status": "reported",
+    "checks": [
+      "text",
+      "automatic_tool_roundtrip",
+      "forced_tool_roundtrip",
+      "context_window"
+    ],
+    "reported_models": [
+      "accounts/fireworks/models/kimi-k3p1-pro"
+    ],
+    "unknown_model_responses": 0,
+    "passed": true,
+    "elapsed_seconds": 5.61
+  },
+  {
+    "target": "medium",
+    "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+    "api": "openai_chat",
+    "settings_sha256": "f3d387190310fe42a59b1dfb8053cdbd0d7020c9f52fcd0884c6fe677a8c7e7b",
+    "required_context_window": 1048576,
+    "context_window": 1048576,
+    "context_window_field": "context_length",
+    "context_window_status": "reported",
+    "checks": [
+      "text",
+      "automatic_tool_roundtrip",
+      "forced_tool_roundtrip",
+      "context_window"
+    ],
+    "reported_models": [
+      "accounts/fireworks/models/deepseek-v4p1-flash-1017"
+    ],
+    "unknown_model_responses": 0,
+    "passed": true,
+    "elapsed_seconds": 1.67
+  },
+  {
+    "target": "low",
+    "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+    "api": "openai_chat",
+    "settings_sha256": "2461530a5ec4cf755dd9cc90ff9a5137188d4f25dfde29bd3e7882727ca919ec",
+    "required_context_window": 1048576,
+    "context_window": 1048576,
+    "context_window_field": "context_length",
+    "context_window_status": "reported",
+    "checks": [
+      "text",
+      "automatic_tool_roundtrip",
+      "forced_tool_roundtrip",
+      "context_window"
+    ],
+    "reported_models": [
+      "accounts/fireworks/models/deepseek-v4p1-flash-1017"
+    ],
+    "unknown_model_responses": 0,
+    "passed": true,
+    "elapsed_seconds": 1.55
+  },
+  {
+    "target": "instant",
+    "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+    "api": "openai_chat",
+    "settings_sha256": "6c2b206e30a98d16f1e026fd2434d1aecd2baffe1e3b221be1318c8e1a356bc5",
+    "required_context_window": 1048576,
+    "context_window": 1048576,
+    "context_window_field": "context_length",
+    "context_window_status": "reported",
+    "checks": [
+      "text",
+      "automatic_tool_roundtrip",
+      "forced_tool_roundtrip",
+      "context_window"
+    ],
+    "reported_models": [
+      "accounts/fireworks/models/deepseek-v4p1-flash-1017"
+    ],
+    "unknown_model_responses": 0,
+    "passed": true,
+    "elapsed_seconds": 1.28
+  }
+]

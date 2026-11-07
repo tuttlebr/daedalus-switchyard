@@ -1,0 +1,12 @@
+{
+  "helm_revision": 199,
+  "helm_status": "deployed",
+  "source_sha256": "f9a65e586c58b5a4d73d81115d8cfa46a013a4d8158015e28117554c45fa979d",
+  "mounted_configuration_matches_rendered_source": true,
+  "service_spec_unchanged": true,
+  "networkpolicy_specs_unchanged": true,
+  "lan_nodeport": 30260,
+  "lan_source_range": "192.168.1.0/24",
+  "prechange_rollback": ".deploy-backups/20261107T001238Z-switchyard-dw4yfk5m/restore.sh",
+  "final_deployment_backup": "/volume2/daedalus/datasets/daedalus-switchyard/.deploy-backups/20261107T001456Z-switchyard-tdq48vms"
+}

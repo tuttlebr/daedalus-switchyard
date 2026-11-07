@@ -17,7 +17,7 @@ Only two `routes_*.toml` deployment sources are currently present:
 
 | Configuration | Answering model | Upstream transport | Required credential | Automatic fallback |
 | --- | --- | --- | --- | --- |
-| [routes_custom.toml](routes_custom.toml) (default) | `accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast` | `openai_chat` at `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | `xhigh` |
+| [routes_custom.toml](routes_custom.toml) (default) | DeepSeek V4.1 Flash 1017 Ultrafast + Kimi K3.1 Pro | `openai_chat` at `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | `xhigh` |
 | [routes_openai.toml](routes_openai.toml) | `gpt-6-luna` | `openai_responses` at `https://api.openai.com/v1` | `OPENAI_API_KEY` | `medium` |
 
 Both files use the decision service at
@@ -37,15 +37,21 @@ the selected file. Direct Helm use must also supply
 
 Both configurations expose exactly these seven model IDs:
 
-| Requested model | Target | Default reasoning effort in both files |
+| Requested model | Custom: model / effort | OpenAI: effort |
 | --- | --- | --- |
 | `daedalus` | Fresh decision among all six targets | Selected target's effort |
-| `daedalus/max` | `max` | `max` |
-| `daedalus/xhigh` | `xhigh` | `xhigh` |
-| `daedalus/high` | `high` | `high` |
-| `daedalus/medium` | `medium` | `medium` |
-| `daedalus/low` | `low` | `low` |
-| `daedalus/instant` | `instant` | `low` |
+| `daedalus/max` | Kimi K3.1 Pro / `max` | `max` |
+| `daedalus/xhigh` | Kimi K3.1 Pro / `high` | `xhigh` |
+| `daedalus/high` | Kimi K3.1 Pro / `low` | `high` |
+| `daedalus/medium` | DeepSeek V4.1 Flash 1017 Ultrafast / `high` | `medium` |
+| `daedalus/low` | DeepSeek V4.1 Flash 1017 Ultrafast / `low` | `low` |
+| `daedalus/instant` | DeepSeek V4.1 Flash 1017 Ultrafast / `none` | `low` |
+
+Custom names are work profiles, not a claim that provider effort strings are
+comparable across models. The two model families each provide three distinct
+configurations. `instant` disables reasoning by default; the model still supports
+reasoning when a caller overrides that default. All custom answering targets use
+Fireworks serverless. See the [optimization evidence](docs/investigations/routes-optimization-2026-11-06/README.md).
 
 The six explicit routes are `passthrough` routes and bypass the classifier.
 All seven enable tool calling and reasoning. Each explicit route also declares
@@ -69,18 +75,20 @@ flowchart LR
 
 ### Provider defaults and affinity
 
-In the custom configuration, all six targets use the same Fireworks ultrafast
-router. `max` through `low` set `reasoning_history = "interleaved"`; `instant`
-sets `reasoning_history = "disabled"` while still requesting low reasoning
-effort. Every target sets `context_length_exceeded_behavior = "truncate"` and
-`stream = true`. For example:
+The custom configuration uses DeepSeek Ultrafast for responsive routine work and
+Kimi K3.1 Pro for demanding work. All six targets use `reasoning_history =
+"interleaved"`, retaining reasoning within the current tool turn while clearing
+it across user turns. Each sets `context_length_exceeded_behavior = "truncate"`
+and leave `stream` unset so the caller controls streaming. A target-level
+`stream = true` in this build incorrectly overrides explicit non-streaming
+requests. For example:
 
 ```toml
-[targets.high]
-id = "high"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+[targets.xhigh]
+id = "xhigh"
+model = "accounts/fireworks/models/kimi-k3p1-pro"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "high", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved", stream = true }
+extra_body = { reasoning_effort = "high", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved" }
 ```
 
 The OpenAI targets all use `gpt-6-luna`, with `text.verbosity = "low"`,
@@ -150,17 +158,16 @@ Both files retain the table name `[routes.stage]`, but its type is
 to `daedalus` is classified anew, including tool continuations and retries.
 There is no retained task floor, stage override, or recovery hold.
 
-The classifier chooses among six named choices plus `uncertain`. Both files
-use the same probability gates:
+The classifier chooses among six named choices plus `uncertain`:
 
-| Choice | Minimum winning probability | Intended work in the classifier criteria |
-| --- | ---: | --- |
-| `instant` | 0.90 | Greetings and bounded, latency-sensitive work |
-| `low` | 0.80 | Mechanical extraction, direct facts, predictable tool loops |
-| `medium` | 0.70 | Ordinary implementation, research, synthesis and verification |
-| `high` | 0.60 | Hard debugging, multi-step inference and adaptive investigation |
-| `xhigh` | 0.55 | Deep analysis, conflicting evidence and independent cross-checks |
-| `max` | 0.50 | Exceptional difficulty or consequential work |
+| Choice | Custom minimum winning probability | OpenAI minimum | Custom intended work |
+| --- | ---: | ---: | --- |
+| `instant` | 0.90 | 0.90 | Trivial greetings, acknowledgments, verbatim repetition |
+| `low` | 0.60 | 0.80 | Mechanical extraction, direct facts, predictable tool loops |
+| `medium` | 0.50 | 0.70 | Ordinary implementation, research, synthesis and verification |
+| `high` | 0.50 | 0.60 | Hard debugging, multi-step inference and adaptive investigation |
+| `xhigh` | 0.55 | 0.55 | Deep analysis, conflicting evidence and independent cross-checks |
+| `max` | 0.50 | 0.50 | Exceptional difficulty or concrete high-impact work |
 
 These gates are policy settings, not calibrated probabilities of task success.
 Uncertain or below-gate choices, classifier failures, and timeouts use the
@@ -211,23 +218,17 @@ Caller credentials and arbitrary headers are not forwarded to the judge.
 
 ### Known configuration discrepancies
 
-Some classifier prose and comments lag behind the executable TOML settings:
+The custom prompt now matches the executable fallback and describes task
+requirements without embedding provider model names that can drift. Its judge
+is discovered from the internal decision service; answering stays on Fireworks.
 
-- Both prompts describe `instant` as high effort, but both targets request `low`.
-- The OpenAI prompt still describes Fireworks/DeepSeek answering targets and a
-  US router; its actual targets use OpenAI `gpt-6-luna`. The custom prompt also
-  retains some US-router comparisons despite using ultrafast for every target.
-- Both `uncertain_criteria` strings describe an `instant` fallback; the actual
-  fallbacks are `xhigh` and `medium`, respectively.
-- Both prompts name a Rune judge and describe Fireworks hosting, but the
-  classifier actually discovers the model from the configured internal service.
-- Both `max` comments say there is no additional probability gate; the configured
-  `min_probability` is `0.50`.
-
-The tables above follow the target fields, route fields and numeric gates.
-The stale prose is still sent to the judge and can affect classification; it
-does not change provider destinations or executable fallback settings. Neither
-profile supplies a local-processing privacy boundary.
+The separate OpenAI configuration was not changed by the custom optimization.
+Its prompt still describes Fireworks answering models, high effort for instant,
+an instant fallback and a Rune judge, while its executable settings use
+`gpt-6-luna`, low effort for instant, medium fallback and judge discovery. Its
+max comment also incorrectly describes the 0.50 gate as absent. Treat the target
+fields and numeric gates as authoritative. Neither configuration supplies a
+local-processing answering boundary.
 
 ## Repository layout and patches
 
@@ -281,8 +282,8 @@ SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
 ```
 
 Some configuration/transport tests still assume removed local aliases or earlier
-provider mappings, notably `tests/test_bolt_local_routes.py` and
-`tests/test_fireworks_routes.py`. Those expectations need reconciliation with
+provider mappings, notably `tests/test_bolt_local_routes.py`. The custom configuration assertions
+in `tests/test_fireworks_routes.py` were updated with this optimization. Those expectations need reconciliation with
 the current route files; the full suite should not be assumed to pass unchanged.
 
 To test a deployed configuration:

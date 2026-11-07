@@ -8,90 +8,71 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FireworksRoutesTest(unittest.TestCase):
-    def test_agent_profiles_resolve_to_distinct_target_identities(self):
-        config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
-        targets = config["targets"]
-        self.assertEqual(len({t["id"] for t in targets.values()}), len(targets))
-        routes = {r["id"]: r for r in config["routes"].values()}
-        for alias in ("daedalus", "daedalus/deep", "daedalus/xhigh", "daedalus/max"):
-            self.assertIn(alias, routes)
-        for route in routes.values():
-            for key in ("target", "default_target", "capable_target", "efficient_target"):
-                if key in route:
-                    self.assertIn(route[key], targets)
-            if route["type"] == "composite":
-                if route["classifier"].get("type", "llm") == "llm":
-                    self.assertIn(route["classifier"]["target"], targets)
-                for key in ("capable_target", "efficient_target"):
-                    self.assertIn(route["stage"][key], targets)
-                for choice in route["classifier"].get("choices", {}).values():
-                    self.assertIn(choice["target"], targets)
-
-    def test_automatic_profiles_use_standalone_every_request_decisions(self):
+    def test_public_routes_and_all_target_references_resolve(self):
         for name in ("routes_custom.toml", "routes_openai.toml"):
             with self.subTest(profile=name):
                 config = tomllib.loads((ROOT / name).read_text())
-                route = config["routes"]["stage"]
-                self.assertEqual(route["id"], "daedalus")
+                targets = config["targets"]
+                tiers = {"instant", "low", "medium", "high", "xhigh", "max"}
+                self.assertEqual(set(targets), tiers)
+                self.assertEqual(len({t["id"] for t in targets.values()}), len(targets))
+                routes = {r["id"]: r for r in config["routes"].values()}
+                self.assertEqual(set(routes), {"daedalus"} | {"daedalus/" + t for t in tiers})
+                for tier in tiers:
+                    route = routes["daedalus/" + tier]
+                    self.assertEqual(route["type"], "passthrough")
+                    self.assertEqual(route["target"], tier)
+                    self.assertTrue(route["tool_calling"])
+                    self.assertTrue(route["vision"])
+                route = routes["daedalus"]
                 self.assertEqual(route["type"], "decision_api")
-                self.assertEqual(route["default_target"], "xhigh")
+                self.assertIn(route["default_target"], targets)
                 self.assertNotIn("stage", route)
-                self.assertEqual(route["classifier"]["classify_trigger"], "every_request")
-                self.assertEqual(route["classifier"]["max_input_tokens"], "auto")
-                self.assertTrue(route["classifier"]["truncate_input"])
-                self.assertEqual(set(route["classifier"]["choices"]), {
-                    "local", "instant", "low", "medium", "high", "xhigh", "max",
-                })
-                for choice in route["classifier"]["choices"].values():
-                    self.assertIn(choice["target"], config["targets"])
+                classifier = route["classifier"]
+                self.assertEqual(classifier["classify_trigger"], "every_request")
+                self.assertEqual(classifier["max_input_tokens"], "auto")
+                self.assertTrue(classifier["truncate_input"])
+                self.assertEqual(set(classifier["choices"]), tiers)
+                for choice in classifier["choices"].values():
+                    self.assertIn(choice["target"], targets)
+                    self.assertTrue(0 <= choice["min_probability"] <= 1)
 
-    def test_no_shared_session_identity_or_responses_only_fireworks_defaults(self):
+    def test_custom_targets_preserve_serverless_capabilities(self):
+        import json
+
         config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
-        for client in config["llm_clients"].values():
-            self.assertFalse(
-                any("session" in h.lower() for h in client.get("extra_headers", {}))
-            )
-        self.assertEqual(config["llm_clients"]["fireworks"]["format"], "openai_chat")
-        for target in config["targets"].values():
-            if target["llm_client"] == "fireworks":
-                self.assertNotIn("truncation", target.get("extra_body", {}))
-                self.assertNotEqual(target["extra_body"]["reasoning_effort"], "none")
+        catalog = json.loads((ROOT / "docs/investigations/routes-optimization-2026-11-06/serverless-catalog.json").read_text())
+        models = {m["id"]: m for m in catalog["data"]}
+        self.assertEqual(set(config["llm_clients"]), {"fireworks"})
+        client = config["llm_clients"]["fireworks"]
+        self.assertEqual(client["base_url"], "https://api.fireworks.ai/inference/v1")
+        self.assertEqual(client["format"], "openai_chat")
+        self.assertEqual(client["extra_headers"], {
+            "x-multi-turn-session-id": "${GLOBAL_SESSION_ID}",
+            "x-session-affinity": "${GLOBAL_SESSION_ID}",
+        })
+        for name, target in config["targets"].items():
+            with self.subTest(target=name):
+                self.assertEqual(target["llm_client"], "fireworks")
+                model = models[target["model"]]
+                self.assertTrue(model["supports_tools"])
+                self.assertTrue(model["supports_image_input"])
+                self.assertGreaterEqual(model["context_length"], config["routes"][name]["context_window"])
+                self.assertNotIn("truncation", target["extra_body"])
+                self.assertEqual(target["extra_body"]["reasoning_history"], "interleaved")
+                self.assertNotIn("stream", target["extra_body"])
+                # Muse Open documents four distinct tiers, not max or none.
+                if target["model"].endswith("/muse-spark-open"):
+                    self.assertIn(target["extra_body"]["reasoning_effort"], {"low", "medium", "high", "xhigh"})
 
-    def test_hindsight_alias_has_one_local_destination_and_nonthinking_default(self):
-        for name in ("routes_openai.toml", "routes_custom.toml"):
-            with self.subTest(profile=name):
-                config = tomllib.loads((ROOT / name).read_text())
-                route = config["routes"]["hindsight_local"]
-                self.assertEqual(
-                    route,
-                    {
-                        "id": "daedalus/hindsight-local",
-                        "type": "passthrough",
-                        "target": "hindsight_local",
-                        "tool_calling": True,
-                        "reasoning": False,
-                    },
-                )
-                target = config["targets"][route["target"]]
-                self.assertEqual(target["model"], config["targets"]["local"]["model"])
-                self.assertEqual(target["llm_client"], "local")
-                self.assertEqual(
-                    target["extra_body"],
-                    {
-                        "chat_template_kwargs": {"enable_thinking": False},
-                    },
-                )
-                self.assertEqual(
-                    config["targets"]["local"]["extra_body"],
-                    {
-                        "chat_template_kwargs": {
-                            "enable_thinking": True,
-                            "medium_effort": True,
-                        },
-                        "nvext": {"max_thinking_tokens": 256},
-                    },
-                )
-                self.assertEqual(config["routes"]["none"]["target"], "none")
+    def test_classifier_does_not_advertise_stale_models_or_fallback(self):
+        config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
+        route = config["routes"]["stage"]
+        classifier = route["classifier"]
+        self.assertIn("= " + route["default_target"], classifier["uncertain_criteria"])
+        self.assertNotIn("accounts/fireworks/", classifier["instructions"])
+        self.assertNotIn("US router", str(classifier))
+        self.assertNotIn("router at high", str(classifier))
 
     def test_optional_native_credential_is_discovered_for_deployment(self):
         import importlib.util

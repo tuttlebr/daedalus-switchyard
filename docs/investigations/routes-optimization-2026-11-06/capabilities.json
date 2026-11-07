@@ -1,0 +1,143 @@
+{
+  "version": 2,
+  "routes_sha256": "53c5363736ce42a0c3685f6766fedf46308ad7818fe827115dfd99063789546a",
+  "targets": [
+    {
+      "target": "max",
+      "model": "accounts/fireworks/models/kimi-k3p1-pro",
+      "api": "openai_chat",
+      "settings_sha256": "4789fb11bf051a41e011d0b5032e7d22ffc719f0ee06d5edf13e0dd0fcb058b5",
+      "required_context_window": 1048576,
+      "context_window": 1048576,
+      "context_window_field": "context_length",
+      "context_window_status": "reported",
+      "checks": [
+        "text",
+        "automatic_tool_roundtrip",
+        "forced_tool_roundtrip",
+        "context_window"
+      ],
+      "reported_models": [
+        "accounts/fireworks/models/kimi-k3p1-pro"
+      ],
+      "unknown_model_responses": 0,
+      "passed": true,
+      "elapsed_seconds": 8.38
+    },
+    {
+      "target": "xhigh",
+      "model": "accounts/fireworks/models/muse-spark-open",
+      "api": "openai_chat",
+      "settings_sha256": "680550a692330549590273049d28239990ff59e6dea462a99c74248ac9dc712c",
+      "required_context_window": 1048576,
+      "context_window": 1048576,
+      "context_window_field": "context_length",
+      "context_window_status": "reported",
+      "passed": false,
+      "error": "duplicate_terminal",
+      "error_message": "The provider sent additional text after declaring the response finished.",
+      "error_details": {
+        "stage": "automatic_tool_selection",
+        "request_id": "chatcmpl-8fadb0346f0f4f7394fff0f8dbd15713",
+        "event_index": 69,
+        "previous_finish_reason": "tool_calls",
+        "content_chars": 63,
+        "tool_call_parts": 0,
+        "done_seen": false,
+        "violation": "content_after_finish"
+      },
+      "elapsed_seconds": 5.23
+    },
+    {
+      "target": "high",
+      "model": "accounts/fireworks/models/muse-spark-open",
+      "api": "openai_chat",
+      "settings_sha256": "893730c7b983aada94c708fb3a1ab26bd3a07325aad1df99d507994d4eefaa41",
+      "required_context_window": 1048576,
+      "context_window": 1048576,
+      "context_window_field": "context_length",
+      "context_window_status": "reported",
+      "checks": [
+        "text",
+        "automatic_tool_roundtrip",
+        "forced_tool_roundtrip",
+        "context_window"
+      ],
+      "reported_models": [
+        "accounts/fireworks/models/muse-spark-open"
+      ],
+      "unknown_model_responses": 0,
+      "passed": true,
+      "elapsed_seconds": 13.21
+    },
+    {
+      "target": "medium",
+      "model": "accounts/fireworks/models/muse-spark-open",
+      "api": "openai_chat",
+      "settings_sha256": "4c3eb4bbf92e7bad8a4df240fcba844e026db4d28c31a31e345630727f8fad08",
+      "required_context_window": 1048576,
+      "context_window": 1048576,
+      "context_window_field": "context_length",
+      "context_window_status": "reported",
+      "passed": false,
+      "error": "duplicate_terminal",
+      "error_message": "The provider sent additional text after declaring the response finished.",
+      "error_details": {
+        "stage": "forced_tool_selection",
+        "request_id": "chatcmpl-113f9c0ec9e142bea653518a84e95732",
+        "event_index": 93,
+        "previous_finish_reason": "tool_calls",
+        "content_chars": 46,
+        "tool_call_parts": 0,
+        "done_seen": false,
+        "violation": "content_after_finish"
+      },
+      "elapsed_seconds": 16.76
+    },
+    {
+      "target": "low",
+      "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+      "api": "openai_chat",
+      "settings_sha256": "4ef023b4b7110e56922151b96f7079dd6cd16d2a653288ab3e23802c246362af",
+      "required_context_window": 1048576,
+      "context_window": 1048576,
+      "context_window_field": "context_length",
+      "context_window_status": "reported",
+      "checks": [
+        "text",
+        "automatic_tool_roundtrip",
+        "forced_tool_roundtrip",
+        "context_window"
+      ],
+      "reported_models": [
+        "accounts/fireworks/models/deepseek-v4p1-flash-1017"
+      ],
+      "unknown_model_responses": 0,
+      "passed": true,
+      "elapsed_seconds": 1.79
+    },
+    {
+      "target": "instant",
+      "model": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+      "api": "openai_chat",
+      "settings_sha256": "2a16da824012f632c203bf153777ae7b2a248b9bfea5f9861a3af60cf17b04dc",
+      "required_context_window": 1048576,
+      "context_window": 1048576,
+      "context_window_field": "context_length",
+      "context_window_status": "reported",
+      "checks": [
+        "text",
+        "automatic_tool_roundtrip",
+        "forced_tool_roundtrip",
+        "context_window"
+      ],
+      "reported_models": [
+        "accounts/fireworks/models/deepseek-v4p1-flash-1017"
+      ],
+      "unknown_model_responses": 0,
+      "passed": true,
+      "elapsed_seconds": 1.5
+    }
+  ],
+  "passed": false
+}

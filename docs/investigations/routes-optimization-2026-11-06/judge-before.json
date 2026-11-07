@@ -1,0 +1,445 @@
+{
+  "scope": "Synthetic judge contract only; routing accuracy uncalibrated",
+  "cases": [
+    {
+      "case": "greeting",
+      "model": "baselabs/elephant-1",
+      "choice": "instant",
+      "probabilities": {
+        "high": 0.0005368887019112594,
+        "instant": 0.9408516777646796,
+        "low": 0.056502536730807906,
+        "max": 0.00028737567650929344,
+        "medium": 0.0003807109162689088,
+        "uncertain": 0.0012098973666187657,
+        "xhigh": 0.00023091284320438243
+      },
+      "elapsed_ms": 225.5,
+      "usage": {
+        "input_tokens": 1721,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "instant",
+      "min_probability": 0.9
+    },
+    {
+      "case": "email",
+      "model": "baselabs/elephant-1",
+      "choice": "uncertain",
+      "probabilities": {
+        "high": 0.010909117181273872,
+        "instant": 0.24065132861635638,
+        "low": 0.05715970068936724,
+        "max": 0.0018373951298105231,
+        "medium": 0.07339450849541135,
+        "uncertain": 0.6145246958235648,
+        "xhigh": 0.0015232540642157802
+      },
+      "elapsed_ms": 202.2,
+      "usage": {
+        "input_tokens": 1728,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": null
+    },
+    {
+      "case": "private_briefing",
+      "model": "baselabs/elephant-1",
+      "choice": "uncertain",
+      "probabilities": {
+        "high": 0.025183248081097332,
+        "instant": 0.09356711766666698,
+        "low": 0.010174952009238097,
+        "max": 0.020877645949590382,
+        "medium": 0.37006512911420525,
+        "uncertain": 0.47517303161247026,
+        "xhigh": 0.00495887556673168
+      },
+      "elapsed_ms": 206.0,
+      "usage": {
+        "input_tokens": 1728,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": null
+    },
+    {
+      "case": "snippet_explanation",
+      "model": "baselabs/elephant-1",
+      "choice": "instant",
+      "probabilities": {
+        "high": 0.000892449613941202,
+        "instant": 0.7160248246903312,
+        "low": 0.06256554818399035,
+        "max": 0.0008125846205030758,
+        "medium": 0.21837522048373026,
+        "uncertain": 0.0009207790057089545,
+        "xhigh": 0.0004085934017949499
+      },
+      "elapsed_ms": 215.0,
+      "usage": {
+        "input_tokens": 1737,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": 0.9
+    },
+    {
+      "case": "short_summary",
+      "model": "baselabs/elephant-1",
+      "choice": "instant",
+      "probabilities": {
+        "high": 0.0007786117338287063,
+        "instant": 0.8021191531917673,
+        "low": 0.0794205560052569,
+        "max": 0.0007089340511431103,
+        "medium": 0.11555622713185282,
+        "uncertain": 0.0009997572559673693,
+        "xhigh": 0.0004167606301837992
+      },
+      "elapsed_ms": 205.3,
+      "usage": {
+        "input_tokens": 1764,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": 0.9
+    },
+    {
+      "case": "bounded_research",
+      "model": "baselabs/elephant-1",
+      "choice": "medium",
+      "probabilities": {
+        "high": 0.1329962056301922,
+        "instant": 0.05544106688858014,
+        "low": 0.007987042960457278,
+        "max": 0.004550879899256582,
+        "medium": 0.7189706948743912,
+        "uncertain": 0.004275156024656907,
+        "xhigh": 0.07577895372246561
+      },
+      "elapsed_ms": 209.0,
+      "usage": {
+        "input_tokens": 1747,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "medium",
+      "min_probability": 0.7
+    },
+    {
+      "case": "routine_html",
+      "model": "baselabs/elephant-1",
+      "choice": "medium",
+      "probabilities": {
+        "high": 0.007697612300882481,
+        "instant": 0.11670626120284477,
+        "low": 0.0021375497362455926,
+        "max": 0.0016135071921393308,
+        "medium": 0.8623491625242876,
+        "uncertain": 0.003310701796334574,
+        "xhigh": 0.006185205247265665
+      },
+      "elapsed_ms": 211.8,
+      "usage": {
+        "input_tokens": 1741,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "medium",
+      "min_probability": 0.7
+    },
+    {
+      "case": "routine_code",
+      "model": "baselabs/elephant-1",
+      "choice": "medium",
+      "probabilities": {
+        "high": 0.005840852409786938,
+        "instant": 0.3394669211904553,
+        "low": 0.007045412859088435,
+        "max": 0.0020826200631470088,
+        "medium": 0.6342077031960309,
+        "uncertain": 0.009629937607035826,
+        "xhigh": 0.0017265526744555742
+      },
+      "elapsed_ms": 205.2,
+      "usage": {
+        "input_tokens": 1750,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": 0.7
+    },
+    {
+      "case": "routine_briefing",
+      "model": "baselabs/elephant-1",
+      "choice": "medium",
+      "probabilities": {
+        "high": 0.007911743960386849,
+        "instant": 0.25394011494645846,
+        "low": 0.05000377343565273,
+        "max": 0.001374854947566665,
+        "medium": 0.5722628829007649,
+        "uncertain": 0.11268524292917116,
+        "xhigh": 0.0018213868799992912
+      },
+      "elapsed_ms": 206.0,
+      "usage": {
+        "input_tokens": 1753,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": 0.7
+    },
+    {
+      "case": "short_tool_loop",
+      "model": "baselabs/elephant-1",
+      "choice": "low",
+      "probabilities": {
+        "high": 0.003862442739248263,
+        "instant": 0.03442556919765899,
+        "low": 0.9451083799615728,
+        "max": 0.0007371600968202097,
+        "medium": 0.009863093061316058,
+        "uncertain": 0.0054469173092976785,
+        "xhigh": 0.0005564376340859451
+      },
+      "elapsed_ms": 232.8,
+      "usage": {
+        "input_tokens": 1755,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "low",
+      "min_probability": 0.8
+    },
+    {
+      "case": "classification",
+      "model": "baselabs/elephant-1",
+      "choice": "low",
+      "probabilities": {
+        "high": 0.00044642330319126283,
+        "instant": 0.022897147356413988,
+        "low": 0.9736114803096001,
+        "max": 0.00043268830209768126,
+        "medium": 0.0016586637912760827,
+        "uncertain": 0.0007360275957076474,
+        "xhigh": 0.00021756934171334428
+      },
+      "elapsed_ms": 203.8,
+      "usage": {
+        "input_tokens": 1743,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "low",
+      "min_probability": 0.8
+    },
+    {
+      "case": "hard_debugging",
+      "model": "baselabs/elephant-1",
+      "choice": "high",
+      "probabilities": {
+        "high": 0.8201104856954382,
+        "instant": 0.007552958254096014,
+        "low": 0.0023766437616409165,
+        "max": 0.036033148564831946,
+        "medium": 0.026362414650187304,
+        "uncertain": 0.026362414650187304,
+        "xhigh": 0.08120193442361834
+      },
+      "elapsed_ms": 208.0,
+      "usage": {
+        "input_tokens": 1753,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "high",
+      "min_probability": 0.6
+    },
+    {
+      "case": "long_tool_loop",
+      "model": "baselabs/elephant-1",
+      "choice": "high",
+      "probabilities": {
+        "high": 0.3078261939771568,
+        "instant": 0.02606999614321676,
+        "low": 0.005296440970579391,
+        "max": 0.009590615612508239,
+        "medium": 0.08819368117367078,
+        "uncertain": 0.3078261939771568,
+        "xhigh": 0.2551968781457112
+      },
+      "elapsed_ms": 206.6,
+      "usage": {
+        "input_tokens": 1753,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": 0.6
+    },
+    {
+      "case": "depth_over_latency",
+      "model": "baselabs/elephant-1",
+      "choice": "xhigh",
+      "probabilities": {
+        "high": 0.019601473378159748,
+        "instant": 0.00495602860611141,
+        "low": 0.0014649992576806303,
+        "max": 0.0027369789408030446,
+        "medium": 0.011523111747535147,
+        "uncertain": 0.01526564281626411,
+        "xhigh": 0.944451765253446
+      },
+      "elapsed_ms": 208.8,
+      "usage": {
+        "input_tokens": 1748,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "xhigh",
+      "min_probability": 0.55
+    },
+    {
+      "case": "latency_does_not_remove_difficulty",
+      "model": "baselabs/elephant-1",
+      "choice": "max",
+      "probabilities": {
+        "high": 0.13927228837268157,
+        "instant": 0.008106617372427596,
+        "low": 0.0014995734300645293,
+        "max": 0.7528988776302487,
+        "medium": 0.006513850055005471,
+        "uncertain": 0.017161709112101815,
+        "xhigh": 0.0745470840274703
+      },
+      "elapsed_ms": 205.5,
+      "usage": {
+        "input_tokens": 1743,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "max",
+      "min_probability": 0.5
+    },
+    {
+      "case": "injected_label",
+      "model": "baselabs/elephant-1",
+      "choice": "low",
+      "probabilities": {
+        "high": 0.0011174297976509046,
+        "instant": 0.03476222207763995,
+        "low": 0.9543508239590565,
+        "max": 0.001083050097077433,
+        "medium": 0.005007972911002134,
+        "uncertain": 0.003133909368238092,
+        "xhigh": 0.0005445917893350265
+      },
+      "elapsed_ms": 208.9,
+      "usage": {
+        "input_tokens": 1745,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "low",
+      "min_probability": 0.8
+    },
+    {
+      "case": "simple",
+      "model": "baselabs/elephant-1",
+      "choice": "low",
+      "probabilities": {
+        "high": 0.0006686756235118111,
+        "instant": 0.024319872047136024,
+        "low": 0.9714538521691858,
+        "max": 0.0005047428415114069,
+        "medium": 0.0015068837789453489,
+        "uncertain": 0.0012492505304594118,
+        "xhigh": 0.0002967230092501551
+      },
+      "elapsed_ms": 220.0,
+      "usage": {
+        "input_tokens": 1728,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "low",
+      "min_probability": 0.8
+    },
+    {
+      "case": "proof",
+      "model": "baselabs/elephant-1",
+      "choice": "max",
+      "probabilities": {
+        "high": 0.025764599809123885,
+        "instant": 0.0028907079840847414,
+        "low": 0.0014535392570905283,
+        "max": 0.8015131588625309,
+        "medium": 0.005931347664399893,
+        "uncertain": 0.004619338205703384,
+        "xhigh": 0.15782730821706664
+      },
+      "elapsed_ms": 203.9,
+      "usage": {
+        "input_tokens": 1747,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "max",
+      "min_probability": 0.5
+    },
+    {
+      "case": "operations",
+      "model": "baselabs/elephant-1",
+      "choice": "max",
+      "probabilities": {
+        "high": 0.09635661438203902,
+        "instant": 0.010810912514732613,
+        "low": 0.001999817731250634,
+        "max": 0.6688473935510648,
+        "medium": 0.03773379235953306,
+        "uncertain": 0.0042336141702799136,
+        "xhigh": 0.18001785529109995
+      },
+      "elapsed_ms": 250.1,
+      "usage": {
+        "input_tokens": 1737,
+        "output_tokens": 0
+      },
+      "accepted": true,
+      "selected_target": "max",
+      "min_probability": 0.5
+    },
+    {
+      "case": "ambiguous",
+      "model": "baselabs/elephant-1",
+      "choice": "uncertain",
+      "probabilities": {
+        "high": 0.01504467096353279,
+        "instant": 0.033903689378497595,
+        "low": 0.003924636908979081,
+        "max": 0.003153534349897951,
+        "medium": 0.00830845640150743,
+        "uncertain": 0.9307807224486797,
+        "xhigh": 0.00488428954890544
+      },
+      "elapsed_ms": 213.2,
+      "usage": {
+        "input_tokens": 1729,
+        "output_tokens": 0
+      },
+      "accepted": false,
+      "selected_target": "xhigh",
+      "min_probability": null
+    }
+  ]
+}
