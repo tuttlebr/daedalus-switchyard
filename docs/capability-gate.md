@@ -95,3 +95,9 @@ This proves upstream behavior for the tested requests. Validate gateway route
 translation and the actual backend image separately before accepting a release;
 the existing route smoke remains useful for that gateway boundary. A later
 provider outage can still occur after a successful check.
+
+Each result retains `target` as its representative name and includes
+`covered_targets` and `covered_aliases` listing all equivalent configured targets
+and their explicit passthrough aliases. Identical client, model, request defaults
+and required context window share one probe; different settings remain separate.
+This checks provider capabilities, not the correctness of each routing decision.

@@ -1319,13 +1319,30 @@ class FireworksChatTransportTest(unittest.TestCase):
                 captured.get(timeout=5)
                 self.assertTrue(captured.empty())
 
+    def test_custom_task_categories_share_high_without_duplicate_public_aliases(self):
+        for category in ("medium", "high", "xhigh"):
+            with self.subTest(category=category), self.router(
+                composite="standalone", verdict=self.target_verdict(category)
+            ) as (url, captured, _config):
+                headers = self.request(url)
+                self.assertEqual(headers["x-model-router-selected-model"], "high")
+                path, _, _ = captured.get(timeout=5)
+                self.assertEqual(path, "/v1/systemone")
+                _, body, _ = captured.get(timeout=5)
+                self.assertEqual(body["reasoning_effort"], "high")
+                for removed in ("medium", "xhigh"):
+                    with self.assertRaises(HTTPError) as error:
+                        self.request(url, model="daedalus/" + removed)
+                    self.assertIn(error.exception.code, (400, 404))
+                self.assertTrue(captured.empty())
+
     def test_standalone_uses_real_profile_and_rejudges_streaming_tool_continuations(self):
         with self.router(
             composite="standalone", verdict=self.target_verdict("low"), decision_auth=True
         ) as (url, captured, config):
             route = config["routes"]["stage"]
             self.assertEqual(route["type"], "decision_api")
-            self.assertEqual(route["default_target"], "xhigh")
+            self.assertEqual(route["default_target"], "high")
             self.assertNotIn("stage", route)
             for stream in (False, True):
                 for critical in (False, True):
@@ -1336,7 +1353,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                     self.assertEqual(headers["x-model-router-selected-model"], "low")
                     path, judge, native_headers = captured.get(timeout=5)
                     self.assertEqual(path, "/v1/systemone")
-                    self.assertIn("NEXT Daedalus model", judge["questions"]["effort"]["instructions"])
+                    self.assertIn("NEXT model response", judge["questions"]["effort"]["instructions"])
                     self.assertIn("authorization", {k.lower() for k in native_headers})
                     _, body, _ = captured.get(timeout=5)
                     self.assertEqual(body["reasoning_effort"], "low")

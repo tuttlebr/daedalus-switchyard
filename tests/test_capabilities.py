@@ -55,6 +55,26 @@ def model_catalog(payload, status=200):
         thread.join()
 
 
+class CapabilityCoverage(unittest.TestCase):
+    def test_equivalent_targets_keep_all_aliases_and_distinct_settings_stay_separate(self):
+        config = {
+            "llm_clients": {"fixture": {"format": "openai_chat", "base_url": "http://fixture"}},
+            "targets": {name: {"model": "fixture", "llm_client": "fixture",
+                                "extra_body": {"reasoning_effort": effort}}
+                        for name, effort in (("high", "high"), ("medium", "high"),
+                                             ("low", "low"), ("large_context", "high"))},
+            "routes": {name: {"id": "daedalus/" + name, "type": "passthrough", "target": name}
+                       for name in ("high", "medium", "low", "large_context")},
+        }
+        groups = list(probe.capability_groups(config, {"large_context": 32768}).values())
+        self.assertEqual(len(groups), 3)
+        self.assertEqual(groups[0]["covered_targets"], ["high", "medium"])
+        self.assertEqual(groups[0]["covered_aliases"], ["daedalus/high", "daedalus/medium"])
+        self.assertEqual(groups[1]["covered_targets"], ["low"])
+        self.assertEqual(groups[2]["covered_targets"], ["large_context"])
+        self.assertEqual(sum(len(group["covered_targets"]) for group in groups), 4)
+
+
 class ContextWindows(unittest.TestCase):
     def test_provider_fields_and_serving_cap(self):
         for field in ("context_window", "context_length", "max_model_len", "max_context_length"):
@@ -172,6 +192,8 @@ class ContextWindows(unittest.TestCase):
                 data = json.loads(report.read_text())
                 row = data["targets"][0]
                 self.assertEqual(exit_code, 0)
+                self.assertEqual(row["covered_targets"], ["low"])
+                self.assertEqual(row["covered_aliases"], [])  # Fixture route omits its public ID.
                 self.assertTrue(data["passed"])
                 self.assertTrue(row["passed"])
                 self.assertEqual(row["context_window"], advertised)

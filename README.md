@@ -17,7 +17,7 @@ Only two `routes_*.toml` deployment sources are currently present:
 
 | Configuration | Answering model | Upstream transport | Required credential | Automatic fallback |
 | --- | --- | --- | --- | --- |
-| [routes_custom.toml](routes_custom.toml) (default) | DeepSeek V4.1 Flash 1017 Ultrafast + Kimi K3.1 Pro | `openai_chat` at `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | `xhigh` |
+| [routes_custom.toml](routes_custom.toml) (default) | DeepSeek V4.1 Flash 1017 Ultrafast | `openai_chat` at `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | `high` |
 | [routes_openai.toml](routes_openai.toml) | `gpt-6-luna` | `openai_responses` at `https://api.openai.com/v1` | `OPENAI_API_KEY` | `medium` |
 
 Both files use the decision service at
@@ -35,48 +35,78 @@ the selected file. Direct Helm use must also supply
 
 ### Public model routes
 
-Both configurations expose exactly these seven model IDs:
+The custom DeepSeek configuration exposes five model IDs: automatic `daedalus`
+and four distinct passthrough settings. The OpenAI variant retains its separate
+six-profile interface; available profiles depend on the selected route file.
 
-| Requested model | Custom: model / effort | OpenAI: effort |
+| Requested model | Custom DeepSeek effort | OpenAI effort |
 | --- | --- | --- |
-| `daedalus` | Fresh decision among all six targets | Selected target's effort |
-| `daedalus/max` | Kimi K3.1 Pro / `max` | `max` |
-| `daedalus/xhigh` | Kimi K3.1 Pro / `high` | `xhigh` |
-| `daedalus/high` | Kimi K3.1 Pro / `low` | `high` |
-| `daedalus/medium` | DeepSeek V4.1 Flash 1017 Ultrafast / `high` | `medium` |
-| `daedalus/low` | DeepSeek V4.1 Flash 1017 Ultrafast / `low` | `low` |
-| `daedalus/instant` | DeepSeek V4.1 Flash 1017 Ultrafast / `none` | `low` |
+| `daedalus` | Automatic selection | Automatic selection |
+| `daedalus/max` | `max` | `max` |
+| `daedalus/high` | `high` | `high` |
+| `daedalus/low` | `low` | `low` |
+| `daedalus/instant` | `none` (reasoning off) | `low` |
+| `daedalus/xhigh` | Not exposed | `xhigh` |
+| `daedalus/medium` | Not exposed | `medium` |
 
-Custom names are work profiles, not a claim that provider effort strings are
-comparable across models. The two model families each provide three distinct
-configurations. `instant` disables reasoning by default; the model still supports
-reasoning when a caller overrides that default. All custom answering targets use
-Fireworks serverless. See the [optimization evidence](docs/investigations/routes-optimization-2026-11-06/README.md).
+[Fireworks documents](https://docs.fireworks.ai/api-reference/post-chatcompletions)
+three named DeepSeek V4.1 thinking tiers: low, high and max. Its medium and xhigh
+inputs both select high. The custom file therefore exposes only those distinct
+settings plus reasoning-off as instant. None remains a provider wire value, not
+a public profile. These names describe requested effort, not guaranteed latency
+or answer quality. Trusted callers can override target defaults.
 
-The six explicit routes are `passthrough` routes and bypass the classifier.
-All seven enable tool calling and reasoning. Each explicit route also declares
-`vision = true` and `context_window = 1048576`; the automatic route does not
-set those two fields. These are configuration declarations, not measured
-provider capabilities. The deployment gate checks generation/tool support and
-reports advertised context limits.
+Automatic routing still classifies six **task categories**. They are not six
+models or six distinct provider settings:
+
+| Task category | Selected custom target |
+| --- | --- |
+| instant | instant |
+| low | low |
+| medium, high, xhigh | high |
+| max | max |
+
+Uncertainty and classifier failure use high. The classifier re-evaluates every
+model request, including tool continuations. Explicit routes bypass it. All
+routes enable tools and reasoning support; explicit routes also declare image
+support and a 1,048,576-token context window. The deployment gate tests generation
+and tools and reports context metadata; declarations alone do not prove capability.
+
+The original [optimization evidence](docs/investigations/routes-optimization-2026-11-06/README.md)
+used DeepSeek for routine tasks and Kimi for harder tasks. It explains the old
+cross-model profile mapping; it does not validate a reversed effort ordering
+when every target uses DeepSeek.
+
+#### Migrating the custom configuration
+
+- Replace `daedalus/medium` and `daedalus/xhigh` with `daedalus/high`, or request
+  `daedalus` for automatic routing. They are removed, not silently aliased.
+- `daedalus/high` now requests high effort. Previously it requested low; choose
+  `daedalus/low` if that previous provider behavior is required.
+- The shipped agent workflow exposes `instant`, `low`, `high`, and `max`.
+  Migrate explicit `model_profile` values and custom request/skill mappings in
+  the same rollout. The generic agent schema still supports medium/xhigh for
+  other providers, but unconfigured profiles are rejected before generation.
+- Deploy matching agent workflow and gateway routes together. Old and new
+  configurations share high's name but not its previous effort default.
 
 `daedalus/deep`, `daedalus/none`, `daedalus/local`, and
-`daedalus/hindsight-local` are no longer defined in either file. None of the
-current routes provides local-only answering.
+`daedalus/hindsight-local` remain absent. Current routes do not provide local-only
+answering.
 
 ```mermaid
 flowchart LR
-  A[Client: Responses, Chat or Messages] --> B[Switchyard]
-  B -->|daedalus: every request| C[Decision API]
-  C --> D[instant / low / medium / high / xhigh / max]
-  B -->|Explicit daedalus/profile| D
-  D --> E[Selected file's answering provider]
+  A[Agent or API client] --> B[Switchyard]
+  B -->|daedalus| C[Six task categories]
+  C --> D[instant / low / high / max]
+  B -->|Explicit custom profile| D
+  D --> E[DeepSeek: none / low / high / max]
 ```
 
 ### Provider defaults and affinity
 
-The custom configuration uses DeepSeek Ultrafast for responsive routine work and
-Kimi K3.1 Pro for demanding work. All six targets use `reasoning_history =
+The custom configuration uses DeepSeek Ultrafast for all four settings. All
+custom targets use `reasoning_history =
 "interleaved"`, retaining reasoning within the current tool turn while clearing
 it across user turns. Each sets `context_length_exceeded_behavior = "truncate"`
 and leave `stream` unset so the caller controls streaming. A target-level
@@ -84,9 +114,9 @@ and leave `stream` unset so the caller controls streaming. A target-level
 requests. For example:
 
 ```toml
-[targets.xhigh]
-id = "xhigh"
-model = "accounts/fireworks/models/kimi-k3p1-pro"
+[targets.high]
+id = "high"
+model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
 llm_client = "fireworks"
 extra_body = { reasoning_effort = "high", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved" }
 ```

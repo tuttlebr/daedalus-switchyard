@@ -561,6 +561,27 @@ def run_target(
     }
 
 
+def capability_groups(config, required_windows):
+    """Probe each effective provider configuration once, retaining its full coverage."""
+    groups = {}
+    for name, target in config["targets"].items():
+        client = config["llm_clients"][target["llm_client"]]
+        required_window = required_windows.get(name)
+        identity = json.dumps(
+            [client, target["model"], target.get("extra_body", {}), required_window],
+            sort_keys=True,
+        )
+        group = groups.setdefault(identity, {"target": target, "client": client,
+            "required_window": required_window, "covered_targets": [], "covered_aliases": []})
+        group["covered_targets"].append(name)
+        group["covered_aliases"].extend(
+            route["id"] for route in config.get("routes", {}).values()
+            if route.get("type") == "passthrough" and route.get("target") == name
+            and "id" in route
+        )
+    return groups
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("routes", type=Path)
@@ -581,19 +602,15 @@ def main():
         "targets": [],
         "passed": True,
     }
-    seen = set()
     context_cache = {}
-    for name, target in config["targets"].items():
-        client = config["llm_clients"][target["llm_client"]]
-        required_window = required_windows.get(name)
-        identity = json.dumps(
-            [client, target["model"], target.get("extra_body", {}), required_window], sort_keys=True
-        )
-        if identity in seen:
-            continue
-        seen.add(identity)
+    for identity, group in capability_groups(config, required_windows).items():
+        target, client = group["target"], group["client"]
+        required_window = group["required_window"]
+        name = group["covered_targets"][0]
         row = {
             "target": name,
+            "covered_targets": group["covered_targets"],
+            "covered_aliases": group["covered_aliases"],
             "model": target["model"],
             "api": client["format"],
             "settings_sha256": hashlib.sha256(identity.encode()).hexdigest(),

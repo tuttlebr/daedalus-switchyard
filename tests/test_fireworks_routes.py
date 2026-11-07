@@ -13,7 +13,8 @@ class FireworksRoutesTest(unittest.TestCase):
             with self.subTest(profile=name):
                 config = tomllib.loads((ROOT / name).read_text())
                 targets = config["targets"]
-                tiers = {"instant", "low", "medium", "high", "xhigh", "max"}
+                categories = {"instant", "low", "medium", "high", "xhigh", "max"}
+                tiers = {"instant", "low", "high", "max"} if name == "routes_custom.toml" else categories
                 self.assertEqual(set(targets), tiers)
                 self.assertEqual(len({t["id"] for t in targets.values()}), len(targets))
                 routes = {r["id"]: r for r in config["routes"].values()}
@@ -32,10 +33,22 @@ class FireworksRoutesTest(unittest.TestCase):
                 self.assertEqual(classifier["classify_trigger"], "every_request")
                 self.assertEqual(classifier["max_input_tokens"], "auto")
                 self.assertTrue(classifier["truncate_input"])
-                self.assertEqual(set(classifier["choices"]), tiers)
+                self.assertEqual(set(classifier["choices"]), categories)
                 for choice in classifier["choices"].values():
                     self.assertIn(choice["target"], targets)
                     self.assertTrue(0 <= choice["min_probability"] <= 1)
+
+    def test_custom_profiles_are_distinct_and_match_provider_effort(self):
+        config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
+        expected = {"instant": "none", "low": "low", "high": "high", "max": "max"}
+        self.assertEqual({name: target["extra_body"]["reasoning_effort"]
+                          for name, target in config["targets"].items()}, expected)
+        choices = config["routes"]["stage"]["classifier"]["choices"]
+        self.assertEqual({name: choice["target"] for name, choice in choices.items()}, {
+            "instant": "instant", "low": "low", "medium": "high", "high": "high",
+            "xhigh": "high", "max": "max",
+        })
+        self.assertEqual(config["routes"]["stage"]["default_target"], "high")
 
     def test_custom_targets_preserve_serverless_capabilities(self):
         import json
