@@ -226,11 +226,15 @@ class NetworkPolicyChart(unittest.TestCase):
 
 class DeployShell(unittest.TestCase):
     def run_deploy(self, *, nodeport=True, failure="", namespace_exists=True,
-                   header_dotenv=None, header_override=None, header_placeholder=False):
+                   header_dotenv=None, header_override=None, header_placeholder=False,
+                   make_target=None, saved_routes=False, route_override=None,
+                   dotenv_settings="", caller_settings=None, make_settings=(),
+                   required_key=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
             (root / "bin").mkdir()
+            shutil.copy(ROOT / "Makefile", root / "Makefile")
             for name in ("deploy.sh", "list_api_key_envs.py", "render_routes.py", "render_routes.sh"):
                 shutil.copy(ROOT / "scripts" / name, root / "scripts" / name)
             (root / "scripts/check_capabilities.py").write_text(
@@ -238,6 +242,7 @@ class DeployShell(unittest.TestCase):
                 "config = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())\n"
                 "with open(os.environ['CALL_LOG'], 'a') as log:\n"
                 "    log.write(json.dumps(['capability-config', config]) + '\\n')\n"
+                "if os.environ['FAILURE'] == 'capability': sys.exit(1)\n"
                 "(pathlib.Path(__file__).parents[1] / 'routes.toml').write_text('# edited during probe\\n')\n"
             )
             (root / "scripts/deploy_state.py").write_text(
@@ -252,8 +257,18 @@ class DeployShell(unittest.TestCase):
             if header_placeholder:
                 with routes.open("a") as route_file:
                     route_file.write('extra_headers = { x-session-affinity = "${GLOBAL_SESSION_ID}" }\n')
+            if required_key:
+                with routes.open("a") as route_file:
+                    route_file.write('api_key_env = "FIXTURE_API_KEY"\n')
+            shutil.copy(routes, root / "routes_fixture.toml")
+            (root / "routes_override.toml").write_text(routes.read_text().replace('http://fixture', 'http://override'))
+            dotenv = dotenv_settings
             if header_dotenv is not None:
-                (root / ".env").write_text(f"GLOBAL_SESSION_ID={header_dotenv}\n")
+                dotenv += f"GLOBAL_SESSION_ID={header_dotenv}\n"
+            if saved_routes:
+                dotenv += "ROUTES_FILE=routes_fixture.toml\n"
+            if dotenv:
+                (root / ".env").write_text(dotenv)
             cli = """#!/usr/bin/env python3
 import json, os, pathlib, sys, tomllib
 name = pathlib.Path(sys.argv[0]).name
@@ -264,33 +279,47 @@ with open(os.environ["CALL_LOG"], "a") as log:
         if arg.startswith('config.routesToml='):
             config = tomllib.loads(pathlib.Path(arg.split('=', 1)[1]).read_text())
             log.write(json.dumps(['helm-config', args[0], config]) + "\\n")
-if args == ["config", "current-context"]: print("fixture")
+if args == ["config", "current-context"]: print("wrong" if os.environ["FAILURE"] == "context" else "fixture")
 if name == "kubectl" and "get" in args and "namespace" in args and os.environ["NS_EXISTS"] == "yes":
     print("namespace/daedalus")
 if "endpointslice" in args: print("10.0.2.35")
 failure = os.environ["FAILURE"]
+if name == "docker" and args[0] == failure: sys.exit(1)
+if name == "docker" and args[:2] == ["image", "inspect"]:
+    if failure == "digest": print('[]')
+    else: print(json.dumps([args[2].rsplit(':', 1)[0] + '@sha256:' + 'b' * 64]))
+if failure == "lint" and name == "helm" and args[0] == "lint": sys.exit(1)
 if failure == "upgrade" and name == "helm" and args[0] == "upgrade": sys.exit(1)
 if failure == "rollout" and "rollout" in args: sys.exit(1)
 if "--raw" in args:
     if failure == "health": sys.exit(1)
     print('{"status":"ok"}')
 """
-            for name in ("helm", "kubectl"):
+            for name in ("helm", "kubectl", "docker"):
                 path = root / "bin" / name
                 path.write_text(cli)
                 path.chmod(0o755)
             calls = root / "calls"
-            environment = {key: value for key, value in os.environ.items() if key != "GLOBAL_SESSION_ID"}
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ("GLOBAL_SESSION_ID", "ROUTES_FILE", "FIXTURE_API_KEY",
+                                          "IMAGE_DIGEST", "MAKEFLAGS", "MAKEOVERRIDES")}
             if header_override is not None:
                 environment["GLOBAL_SESSION_ID"] = header_override
+            environment.update(
+                PATH=str(root / "bin") + os.pathsep + os.environ["PATH"],
+                CALL_LOG=str(calls), FAILURE=failure,
+                NS_EXISTS="yes" if namespace_exists else "no",
+                EXPECTED_CONTEXT="fixture", IMAGE_REPOSITORY="example.test/fixture",
+            )
+            if not saved_routes:
+                environment["ROUTES_FILE"] = str(routes)
+            if route_override is not None:
+                environment["ROUTES_FILE"] = route_override
+            environment.update(caller_settings or {})
+            command = (["make", "--no-print-directory", make_target, *make_settings]
+                       if make_target else ["bash", str(root / "scripts/deploy.sh")])
             result = subprocess.run(
-                ["bash", str(root / "scripts/deploy.sh")], capture_output=True, text=True,
-                env={**environment, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
-                     "CALL_LOG": str(calls), "FAILURE": failure,
-                     "NS_EXISTS": "yes" if namespace_exists else "no",
-                     "ROUTES_FILE": str(routes), "EXPECTED_CONTEXT": "fixture",
-                     "IMAGE_REPOSITORY": "example.test/fixture"},
-                timeout=15,
+                command, capture_output=True, text=True, env=environment, cwd=root, timeout=15,
             )
             return result, calls.read_text() if calls.exists() else ""
 
@@ -345,6 +374,85 @@ if "--raw" in args:
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(calls.splitlines()[-1], "restored")
                 self.assertNotIn("Switchyard is ready", result.stdout)
+
+    def test_plain_make_deploy_builds_publishes_then_upgrades_saved_provider(self):
+        result, calls = self.run_deploy(make_target="deploy", saved_routes=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = [json.loads(line) for line in calls.splitlines()]
+        positions = [next(i for i, line in enumerate(lines) if line[:len(prefix)] == prefix)
+                     for prefix in (["capability-config"], ["docker", "build"],
+                                    ["docker", "push"], ["helm", "upgrade"])]
+        self.assertEqual(positions, sorted(positions))
+        build, push, upgrade = (lines[i] for i in positions[1:])
+        self.assertIn("--pull", build)
+        self.assertIn("linux/amd64", build)
+        self.assertIn("example.test/fixture:v0.3.0", build)
+        self.assertEqual(push, ["docker", "push", "example.test/fixture:v0.3.0"])
+        self.assertIn("--install", upgrade)
+        self.assertIn("image.pullPolicy=Always", upgrade)
+        self.assertIn("image.digest=sha256:" + "b" * 64, upgrade)
+        self.assertTrue(any("restartedAt=" in arg for arg in upgrade))
+        self.assertFalse(any(word in line for line in lines for word in ("delete", "uninstall", "--force")))
+
+    def test_selection_and_deploy_settings_keep_caller_and_make_precedence(self):
+        result, calls = self.run_deploy(make_target="deploy", saved_routes=True,
+                                       dotenv_settings="IMAGE_TAG=saved\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('["docker", "push", "example.test/fixture:saved"]', calls)
+        for make_settings, expected_tag in (((), "caller"), (("IMAGE_TAG=command",), "command")):
+            with self.subTest(make_settings=make_settings):
+                result, calls = self.run_deploy(
+                    make_target="deploy", saved_routes=True,
+                    dotenv_settings="IMAGE_TAG=dotenv\nEXPECTED_CONTEXT=wrong\nIMAGE_REPOSITORY=wrong/repository\n",
+                    caller_settings={"IMAGE_TAG": "caller"},
+                    make_settings=(*make_settings, "ROUTES_FILE=routes_override.toml"),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = [json.loads(line) for line in calls.splitlines()]
+                config = next(line[1] for line in lines if line[0] == "capability-config")
+                self.assertEqual(config["llm_clients"]["fixture"]["base_url"], "http://override")
+                self.assertIn(["docker", "push", f"example.test/fixture:{expected_tag}"], lines)
+        result, calls = self.run_deploy(make_target="deploy", saved_routes=True, route_override="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Set ROUTES_FILE", result.stderr)
+        self.assertEqual(calls, "")
+
+    def test_preflight_build_and_publish_failures_never_upgrade(self):
+        for failure in ("context", "lint", "capability", "build", "push", "digest"):
+            with self.subTest(failure=failure):
+                result, calls = self.run_deploy(make_target="deploy", saved_routes=True, failure=failure)
+                self.assertNotEqual(result.returncode, 0)
+                lines = [json.loads(line) for line in calls.splitlines()]
+                self.assertFalse(any(line[:2] == ["helm", "upgrade"] for line in lines))
+                self.assertFalse(any(word in line for line in lines for word in ("create", "apply", "patch", "delete", "uninstall")))
+                if failure in ("context", "lint", "capability"):
+                    self.assertFalse(any(line[0] == "docker" for line in lines))
+                if failure == "build":
+                    self.assertFalse(any(line[:2] == ["docker", "push"] for line in lines))
+
+    def test_missing_credentials_and_stale_digest_stop_before_build(self):
+        for options in ({"required_key": True},
+                        {"caller_settings": {"IMAGE_DIGEST": "sha256:" + "a" * 64}},
+                        {"route_override": "missing.toml"}):
+            with self.subTest(options=options):
+                result, calls = self.run_deploy(make_target="deploy", saved_routes=True, **options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, "")
+
+    def test_existing_image_opt_out_and_provider_target(self):
+        for target, expected_builds in (("deploy-existing", 0), ("deploy-route_fixture", 1)):
+            with self.subTest(target=target):
+                result, calls = self.run_deploy(make_target=target, saved_routes=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = [json.loads(line) for line in calls.splitlines()]
+                self.assertEqual(sum(line[:2] == ["docker", "build"] for line in lines), expected_builds)
+                self.assertEqual(sum(line[:2] == ["helm", "upgrade"] for line in lines), 1)
+        digest = "sha256:" + "c" * 64
+        result, calls = self.run_deploy(make_target="deploy-existing", saved_routes=True,
+                                       caller_settings={"IMAGE_DIGEST": digest})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("image.digest=" + digest, calls)
+        self.assertNotIn('"docker"', calls)
 
 
 if __name__ == "__main__":

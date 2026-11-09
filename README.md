@@ -43,8 +43,10 @@ that inventory instead of maintaining a fixed provider list:
 ls routes_*.toml
 ```
 
-Select a file explicitly for validation, probes and deployment. No provider is
-chosen by filename order or an implicit default. Adding a provider file adds it
+Select a file explicitly for validation, probes and deployment. Deployment also
+accepts an operator's saved `ROUTES_FILE` in local `.env`; caller environment or
+Make command-line selection takes precedence, including explicit empty values.
+No provider is chosen by filename order or an implicit default. Adding a provider file adds it
 to the configuration contract tests and creates its `deploy-route_<provider>`
 Make target. Each file owns its clients, credentials, target models, reasoning
 payloads, public aliases and fallback. Check those fields when onboarding a
@@ -219,7 +221,26 @@ Providers with configured affinity placeholders require `GLOBAL_SESSION_ID` for 
 headers. `.env.example` includes this non-secret setting; keep the existing ID
 when migrating a deployment to preserve its affinity key.
 
-For example, provider-specific build/push/deploy targets include:
+Save the intended provider in `.env`, for example `ROUTES_FILE=routes_fireworks.toml`,
+then use:
+
+```bash
+make deploy
+# Override the saved selection for this deployment:
+make deploy ROUTES_FILE=routes_openai.toml
+```
+
+`make deploy` validates the selected configuration, credentials and Kubernetes
+context, renders/lints the chart, and passes the provider capability gate before
+building or publishing. It builds the current checkout for `linux/amd64` with refreshed base images,
+pushes the selected repository/tag, resolves that image's immutable repository
+digest, and upgrades the existing release to that digest. Build, push or digest
+resolution failures stop before Secret updates or release changes. This path
+preserves existing resources and data; it does not uninstall the release or delete
+PVCs. Its restart annotation and `imagePullPolicy: Always` also refresh containers
+when the same source is redeployed.
+
+Provider-specific convenience targets use the same path exactly once:
 
 ```bash
 make deploy-route_fireworks
@@ -228,21 +249,22 @@ make deploy-route_openai
 
 The Makefile discovers these targets from `routes_*.toml`; new provider files
 create matching targets automatically.
-To build or publish separately, use `make image` or `make publish`. To deploy an
-already-published image:
+To build or publish separately, use `make image` or `make publish`. To intentionally
+deploy an already-published image without rebuilding:
 
 ```bash
-make deploy ROUTES_FILE=routes_fireworks.toml
-make deploy ROUTES_FILE=routes_openai.toml
+make deploy-existing ROUTES_FILE=routes_fireworks.toml
+make deploy-existing ROUTES_FILE=routes_openai.toml IMAGE_DIGEST=sha256:<digest>
 ```
 
 Defaults and operator overrides:
 
 | Setting | Default |
 | --- | --- |
-| `ROUTES_FILE` | Required explicit provider file |
+| `ROUTES_FILE` | Required explicit provider file; may be saved in local `.env` for deployment |
 | `IMAGE_REPOSITORY` | `daedalus.ddns.me:5050/btuttle/switchyard` |
 | `IMAGE_TAG` | `v0.3.0` |
+| `IMAGE_PLATFORM` | `linux/amd64`, matching chart scheduling |
 | `EXPECTED_CONTEXT` | `kubernetes-admin@kubernetes` |
 | Namespace | `daedalus` (fixed by the deployment script) |
 | `RELEASE_NAME` | `switchyard` |
@@ -251,9 +273,11 @@ Defaults and operator overrides:
 | `CAPABILITY_TIMEOUT` | `60` seconds |
 | `CAPABILITY_MAX_OUTPUT_TOKENS` | `4096` |
 
-For an immutable image, pass `IMAGE_DIGEST=sha256:...` with the pushed manifest
-digest during deployment. Change release/Secret names only when intending to
-change those resource names.
+The rebuild path discovers the pushed digest and rejects a preset `IMAGE_DIGEST`
+so an old image cannot override the new build. Use `deploy-existing` for an explicit
+digest or existing tag; that mode retains the same validation, backup and rollout
+checks. Caller environment and Make command-line deployment settings override
+`.env`. Change release/Secret names only when intending to change those resource names.
 
 The script snapshots the selected TOML and renders header variables once, so
 validation, probing and deployment use the same resolved contents even if the
@@ -289,7 +313,8 @@ no privilege escalation, all capabilities dropped, `RuntimeDefault` seccomp,
 and no mounted service-account token. CPU/memory requests are `50m`/`64Mi`;
 limits are `1` CPU/`512Mi`. It requires `amd64` and excludes the ARM64
 `daedalus-06` worker. Publish a compatible image and override `nodeSelector`
-and `affinity` together if that topology changes.
+and `affinity` together if that topology changes; change `IMAGE_PLATFORM` with
+those scheduling settings when building for another architecture.
 
 The selected TOML is mounted as `routes.toml` from a ConfigMap. Startup,
 readiness and liveness probes use `/health`. Logs default to `info`, shutdown

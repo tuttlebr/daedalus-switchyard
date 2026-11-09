@@ -6,6 +6,7 @@ ROUTES_FILE ?=
 SWITCHYARD_COMMIT := 336196f6fbfc97ddc71c1700f6092e564e9f23c2
 IMAGE_REPOSITORY ?= daedalus.ddns.me:5050/btuttle/switchyard
 IMAGE_TAG ?= v0.3.0
+IMAGE_PLATFORM ?= linux/amd64
 LOCAL_IMAGE ?= $(IMAGE_REPOSITORY):$(IMAGE_TAG)
 EXPECTED_CONTEXT ?= kubernetes-admin@kubernetes
 ROUTE_FILES := $(wildcard routes_*.toml)
@@ -33,7 +34,7 @@ $(TEST_ROUTE_ARGS):
 endif
 endif
 
-.PHONY: validate test helm-lint helm-template image publish deploy $(DEPLOY_ROUTE_TARGETS)
+.PHONY: validate test helm-lint helm-template image publish deploy deploy-existing $(DEPLOY_ROUTE_TARGETS)
 
 validate: helm-lint helm-template
 
@@ -69,7 +70,8 @@ helm-template:
 	kubectl apply --dry-run=client --validate=false -f /tmp/switchyard-rendered.yaml >/dev/null
 
 image:
-	docker build \
+	docker build --pull \
+		--platform $(IMAGE_PLATFORM) \
 		--build-arg SWITCHYARD_COMMIT=$(SWITCHYARD_COMMIT) \
 		--tag $(LOCAL_IMAGE) .
 
@@ -77,12 +79,12 @@ publish: image
 	docker push $(LOCAL_IMAGE)
 
 deploy:
-	@test -n "$(ROUTES_FILE)" || { echo 'Set ROUTES_FILE. Available: $(ROUTE_FILES)' >&2; exit 64; }
-	ROUTES_FILE=$(ROUTES_FILE) \
-	IMAGE_REPOSITORY=$(IMAGE_REPOSITORY) \
-	IMAGE_TAG=$(IMAGE_TAG) \
-	EXPECTED_CONTEXT=$(EXPECTED_CONTEXT) \
+	./scripts/deploy.sh --build-publish
+
+# Caller environment and command-line Make variables are exported by Make.
+# Do not export the empty ROUTES_FILE default over an operator's saved selection.
+deploy-existing:
 	./scripts/deploy.sh
 
-$(DEPLOY_ROUTE_TARGETS): deploy-route_%: routes_%.toml publish
+$(DEPLOY_ROUTE_TARGETS): deploy-route_%: routes_%.toml
 	$(MAKE) deploy ROUTES_FILE=$<

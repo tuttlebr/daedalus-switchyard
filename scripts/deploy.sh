@@ -4,6 +4,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 CHART_DIR="${PROJECT_DIR}/charts/switchyard"
+build_publish=false
+if [[ $# == 1 && "$1" == --build-publish ]]; then
+  build_publish=true
+elif [[ $# != 0 ]]; then
+  echo 'usage: scripts/deploy.sh [--build-publish]' >&2
+  exit 64
+fi
+readonly build_publish
+
+# A saved provider is an explicit operator choice, never a filename-order default.
+# Preserve an explicitly empty caller value so it fails rather than selecting .env.
+if [[ ! -v ROUTES_FILE && -f "${PROJECT_DIR}/.env" ]]; then
+  ROUTES_FILE="$(
+    source "${PROJECT_DIR}/.env"
+    printf '%s' "${ROUTES_FILE:-}"
+  )"
+fi
 ROUTES_FILE="${ROUTES_FILE:-}"
 if [[ -z "${ROUTES_FILE}" ]]; then
   echo 'Set ROUTES_FILE to a provider configuration. Available:' >&2
@@ -15,11 +32,15 @@ if [[ "${ROUTES_FILE}" != /* ]]; then
 fi
 
 NAMESPACE="daedalus"
-RELEASE_NAME="${RELEASE_NAME:-switchyard}"
-SECRET_NAME="${SECRET_NAME:-switchyard-api-key}"
-EXPECTED_CONTEXT="${EXPECTED_CONTEXT:-kubernetes-admin@kubernetes}"
-IMAGE_TAG="${IMAGE_TAG:-v0.3.0}"
-HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
+deploy_setting_names=(RELEASE_NAME SECRET_NAME EXPECTED_CONTEXT IMAGE_REPOSITORY
+  IMAGE_TAG IMAGE_PLATFORM IMAGE_DIGEST HELM_TIMEOUT CAPABILITY_TIMEOUT CAPABILITY_MAX_OUTPUT_TOKENS
+  DEPLOY_BACKUP_DIR)
+declare -A caller_deploy_values=()
+for deploy_setting_name in "${deploy_setting_names[@]}"; do
+  if [[ -v "${deploy_setting_name}" ]]; then
+    caller_deploy_values["${deploy_setting_name}"]="${!deploy_setting_name}"
+  fi
+done
 
 for command_name in helm kubectl python3; do
   command -v "${command_name}" >/dev/null 2>&1 || {
@@ -73,6 +94,17 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
 fi
 ROUTES_FILE="${gate_snapshot_dir}/routes.toml"
 
+for deploy_setting_name in "${!caller_deploy_values[@]}"; do
+  printf -v "${deploy_setting_name}" '%s' "${caller_deploy_values[${deploy_setting_name}]}"
+  export "${deploy_setting_name}"
+done
+RELEASE_NAME="${RELEASE_NAME:-switchyard}"
+SECRET_NAME="${SECRET_NAME:-switchyard-api-key}"
+EXPECTED_CONTEXT="${EXPECTED_CONTEXT:-kubernetes-admin@kubernetes}"
+IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-daedalus.ddns.me:5050/btuttle/switchyard}"
+IMAGE_TAG="${IMAGE_TAG:-v0.3.0}"
+HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
+
 for api_key_env_name in "${api_key_env_names[@]}"; do
   if [[ -n "${caller_api_key_was_set[${api_key_env_name}]-}" ]]; then
     printf -v "${api_key_env_name}" '%s' \
@@ -107,6 +139,18 @@ if [[ -n "${IMAGE_DIGEST:-}" && ! "${IMAGE_DIGEST}" =~ ^sha256:[a-f0-9]{64}$ ]];
   echo "IMAGE_DIGEST must be a sha256:<64 lowercase hex characters> digest" >&2
   exit 64
 fi
+if [[ "${build_publish}" == true ]]; then
+  if [[ -n "${IMAGE_DIGEST:-}" ]]; then
+    echo 'IMAGE_DIGEST selects an existing image; use make deploy-existing or unset it to rebuild.' >&2
+    exit 64
+  fi
+  for command_name in make docker; do
+    command -v "${command_name}" >/dev/null 2>&1 || {
+      echo "required command not found: ${command_name}" >&2
+      exit 127
+    }
+  done
+fi
 
 actual_context="$(kubectl config current-context)"
 if [[ "${actual_context}" != "${EXPECTED_CONTEXT}" ]]; then
@@ -121,6 +165,7 @@ helm_validation_args=(
   --set-string "fullnameOverride=${RELEASE_NAME}"
   --set-string "image.repository=${IMAGE_REPOSITORY}"
   --set-string "image.tag=${IMAGE_TAG}"
+  --set-string "image.pullPolicy=Always"
   --set-string "apiKeySecret.name=${SECRET_NAME}"
   --set-json "apiKeySecret.keys=${api_key_envs_json}"
   --set-string "${restart_annotation}"
@@ -140,6 +185,37 @@ helm template "${RELEASE_NAME}" "${CHART_DIR}" \
 python3 "${PROJECT_DIR}/scripts/check_capabilities.py" "${ROUTES_FILE}" \
   --timeout "${CAPABILITY_TIMEOUT:-60}" \
   --max-output-tokens "${CAPABILITY_MAX_OUTPUT_TOKENS:-4096}"
+
+# Preflight and provider checks finish before registry writes. Build from this
+# checkout and publish exactly the repository/tag that the upgrade will select.
+# A failed build/push stops before backup/adoption, Secret changes or upgrade.
+if [[ "${build_publish}" == true ]]; then
+  make --no-print-directory -C "${PROJECT_DIR}" publish \
+    "LOCAL_IMAGE=${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+  docker image inspect "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+    --format '{{json .RepoDigests}}' >"${gate_snapshot_dir}/image-digests.json"
+  IMAGE_DIGEST="$(python3 - "${IMAGE_REPOSITORY}" "${gate_snapshot_dir}/image-digests.json" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+repository = sys.argv[1]
+entries = json.loads(Path(sys.argv[2]).read_text())
+if not isinstance(entries, list):
+    raise SystemExit("Pushed image has no repository digests; refusing deployment")
+digests = {
+    entry.split("@", 1)[1] for entry in entries
+    if isinstance(entry, str) and entry.startswith(repository + "@")
+    and re.fullmatch(r"sha256:[a-f0-9]{64}", entry.split("@", 1)[1])
+}
+if len(digests) != 1:
+    raise SystemExit("Expected one digest for the pushed repository; refusing deployment")
+print(digests.pop())
+PY
+  )"
+  helm_validation_args+=(--set-string "image.digest=${IMAGE_DIGEST}")
+  helm template "${RELEASE_NAME}" "${CHART_DIR}" \
+    --namespace "${NAMESPACE}" "${helm_validation_args[@]}" >"${gate_snapshot_dir}/manifest.yaml"
+fi
 
 python3 "${PROJECT_DIR}/scripts/deploy_state.py" \
   --manifest "${gate_snapshot_dir}/manifest.yaml" \
@@ -199,6 +275,7 @@ helm_args=(
   --set-string "fullnameOverride=${RELEASE_NAME}"
   --set-string "image.repository=${IMAGE_REPOSITORY}"
   --set-string "image.tag=${IMAGE_TAG}"
+  --set-string "image.pullPolicy=Always"
   --set-string "apiKeySecret.name=${SECRET_NAME}"
   --set-json "apiKeySecret.keys=${api_key_envs_json}"
   --set-string "${restart_annotation}"
