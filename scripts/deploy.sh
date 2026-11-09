@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Stays within bash 3.2 (macOS /bin/bash): no associative arrays, `[[ -v ]]` or mapfile.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +16,7 @@ readonly build_publish
 
 # A saved provider is an explicit operator choice, never a filename-order default.
 # Preserve an explicitly empty caller value so it fails rather than selecting .env.
-if [[ ! -v ROUTES_FILE && -f "${PROJECT_DIR}/.env" ]]; then
+if [[ -z "${ROUTES_FILE+x}" && -f "${PROJECT_DIR}/.env" ]]; then
   ROUTES_FILE="$(
     source "${PROJECT_DIR}/.env"
     printf '%s' "${ROUTES_FILE:-}"
@@ -35,10 +36,11 @@ NAMESPACE="daedalus"
 deploy_setting_names=(RELEASE_NAME SECRET_NAME EXPECTED_CONTEXT IMAGE_REPOSITORY
   IMAGE_TAG IMAGE_PLATFORM IMAGE_DIGEST HELM_TIMEOUT CAPABILITY_TIMEOUT CAPABILITY_MAX_OUTPUT_TOKENS
   DEPLOY_BACKUP_DIR)
-declare -A caller_deploy_values=()
+# Setting names are fixed identifiers; keep caller values in prefixed scalars.
 for deploy_setting_name in "${deploy_setting_names[@]}"; do
-  if [[ -v "${deploy_setting_name}" ]]; then
-    caller_deploy_values["${deploy_setting_name}"]="${!deploy_setting_name}"
+  if [[ -n "${!deploy_setting_name+x}" ]]; then
+    printf -v "caller_deploy_value_${deploy_setting_name}" '%s' "${!deploy_setting_name}"
+    printf -v "caller_deploy_set_${deploy_setting_name}" '%s' 1
   fi
 done
 
@@ -64,25 +66,22 @@ bash "${PROJECT_DIR}/scripts/render_routes.sh" \
   "${gate_snapshot_dir}/routes.source.toml" "${gate_snapshot_dir}/routes.toml"
 ROUTES_FILE="${gate_snapshot_dir}/routes.toml"
 
-mapfile -t api_key_env_names < <(
-  python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" "${ROUTES_FILE}"
-)
-for api_key_env_index in "${!api_key_env_names[@]}"; do
-  if [[ -z "${api_key_env_names[${api_key_env_index}]}" ]]; then
-    unset 'api_key_env_names[api_key_env_index]'
+# Key names are validated identifiers; blank lines are dropped while reading.
+api_key_env_names=()
+while IFS= read -r api_key_env_name; do
+  if [[ -n "${api_key_env_name}" ]]; then
+    api_key_env_names+=("${api_key_env_name}")
   fi
-done
+done < <(python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" "${ROUTES_FILE}")
 api_key_envs_json="$(
   python3 "${PROJECT_DIR}/scripts/list_api_key_envs.py" \
     --json "${ROUTES_FILE}"
 )"
 
-declare -A caller_api_key_values=()
-declare -A caller_api_key_was_set=()
-for api_key_env_name in "${api_key_env_names[@]}"; do
-  if [[ -v "${api_key_env_name}" ]]; then
-    caller_api_key_values["${api_key_env_name}"]="${!api_key_env_name}"
-    caller_api_key_was_set["${api_key_env_name}"]=1
+for api_key_env_name in ${api_key_env_names[@]+"${api_key_env_names[@]}"}; do
+  if [[ -n "${!api_key_env_name+x}" ]]; then
+    printf -v "caller_api_key_value_${api_key_env_name}" '%s' "${!api_key_env_name}"
+    printf -v "caller_api_key_set_${api_key_env_name}" '%s' 1
   fi
 done
 
@@ -94,9 +93,13 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
 fi
 ROUTES_FILE="${gate_snapshot_dir}/routes.toml"
 
-for deploy_setting_name in "${!caller_deploy_values[@]}"; do
-  printf -v "${deploy_setting_name}" '%s' "${caller_deploy_values[${deploy_setting_name}]}"
-  export "${deploy_setting_name}"
+for deploy_setting_name in "${deploy_setting_names[@]}"; do
+  caller_deploy_set_name="caller_deploy_set_${deploy_setting_name}"
+  if [[ -n "${!caller_deploy_set_name+x}" ]]; then
+    caller_deploy_value_name="caller_deploy_value_${deploy_setting_name}"
+    printf -v "${deploy_setting_name}" '%s' "${!caller_deploy_value_name}"
+    export "${deploy_setting_name}"
+  fi
 done
 RELEASE_NAME="${RELEASE_NAME:-switchyard}"
 SECRET_NAME="${SECRET_NAME:-switchyard-api-key}"
@@ -105,13 +108,14 @@ IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-daedalus.ddns.me:5050/btuttle/switchyard}"
 IMAGE_TAG="${IMAGE_TAG:-v0.3.0}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
 
-for api_key_env_name in "${api_key_env_names[@]}"; do
-  if [[ -n "${caller_api_key_was_set[${api_key_env_name}]-}" ]]; then
-    printf -v "${api_key_env_name}" '%s' \
-      "${caller_api_key_values[${api_key_env_name}]}"
+for api_key_env_name in ${api_key_env_names[@]+"${api_key_env_names[@]}"}; do
+  caller_api_key_set_name="caller_api_key_set_${api_key_env_name}"
+  if [[ -n "${!caller_api_key_set_name+x}" ]]; then
+    caller_api_key_value_name="caller_api_key_value_${api_key_env_name}"
+    printf -v "${api_key_env_name}" '%s' "${!caller_api_key_value_name}"
     export "${api_key_env_name}"
   fi
-  if [[ ! -v "${api_key_env_name}" || -z "${!api_key_env_name}" ]]; then
+  if [[ -z "${!api_key_env_name:-}" ]]; then
     echo "Set ${api_key_env_name} in .env or the environment; ${ROUTES_FILE} requires it" >&2
     exit 64
   fi
@@ -223,7 +227,10 @@ python3 "${PROJECT_DIR}/scripts/deploy_state.py" \
   --backup-root "${DEPLOY_BACKUP_DIR:-${PROJECT_DIR}/.deploy-backups}" \
   --namespace "${NAMESPACE}" --release "${RELEASE_NAME}" \
   --secret "${SECRET_NAME}" --context "${EXPECTED_CONTEXT}" --timeout "${HELM_TIMEOUT}"
-mapfile -t deployment_state < <(
+deployment_state=()
+while IFS= read -r deployment_state_line; do
+  deployment_state+=("${deployment_state_line}")
+done < <(
   python3 - "${gate_snapshot_dir}/state.json" <<'PY'
 import json, sys
 state = json.load(open(sys.argv[1]))

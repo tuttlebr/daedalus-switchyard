@@ -151,7 +151,7 @@ forwarded to the judge. Routing grants no permissions or privacy guarantees.
 
 ## Validate and test
 
-Use Python 3.11+, Bash 4+, Helm and kubectl. Select a file explicitly:
+Use Python 3.11+, Bash 3.2+ (macOS `/bin/bash` included), Helm and kubectl. Select a file explicitly:
 
 ```bash
 make validate ROUTES_FILE=routes_fireworks.toml
