@@ -2,9 +2,12 @@
 
 This document records the earlier local-model design. Current selectable route
 files do not expose these local aliases; this is not the active route inventory.
+The synthetic legacy transport fixture retains this configuration only to test
+protocol compatibility. Discover current aliases from `routes_*.toml` and never
+copy this historical configuration over a selected provider file.
 
 The historical `daedalus/local` and `daedalus/hindsight-local`
-routes request `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` through the
+routes requested `nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB` through the
 shared Dynamo gateway. This is one selected local model for both
 aliases, including clients configured for image input.
 
@@ -15,10 +18,10 @@ Deployment evidence must establish the actual serving artifact.
 
 | Route configuration  | Fixed local targets                |
 | -------------------- | ---------------------------------- |
-| `routes_openai.toml` | `local`, `hindsight_local` |
+| Historical OpenAI variant | `local`, `hindsight_local` |
 | Historical hosted-provider variant | `local`, `hindsight_local` |
 
-Both profiles use the existing Chat client and `LOCAL_API_KEY` mechanism at
+Both historical profiles used a Chat client and `LOCAL_API_KEY` mechanism at
 `http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1`.
 The gateway requires a valid `LOCAL_API_KEY` and routes by the target's `model`
 field. A different local model can be selected using its advertised `/v1/models`
@@ -31,12 +34,12 @@ The `local` target enables thinking and requests efficient reasoning with
 typed Dynamo extension `nvext = { max_thinking_tokens = 256 }` bounds a
 reasoning span within the independent request output limit. It is not an
 aggregate workflow reasoning ceiling. `hindsight_local` keeps its
-nonthinking default and do not force a thinking-token budget. Trusted caller
+nonthinking default and does not force a thinking-token budget. Trusted caller
 fields retain the existing shallow merge precedence.
 
-Merge the declared local destination and target changes into a fresh copy of the
-active configuration. Preserve concurrent cloud, classifier, route, credential
-and deployment changes; do not replay an entire older profile over live state.
+Reintroducing local destinations requires an explicit provider configuration
+change, consumer compatibility checks and capability verification. Preserve
+current cloud, classifier, route, credential and deployment contracts.
 The `none` option and `daedalus/none` alias are retired; do not restore them for
 background or vision roles.
 

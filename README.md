@@ -11,6 +11,29 @@ Responses (`/v1/responses`), and Anthropic Messages (`/v1/messages`), plus
 `/v1/models`, `/health`, and `/metrics`. The routes below describe the repository
 configuration; a running release uses the route file selected at deployment.
 
+## Place in the Daedalus architecture
+
+The Rust agent sends model requests to Switchyard, which owns automatic effort
+classification, provider translation and model fallback. The agent calls the
+sandbox execution service and the context stack directly. Context owns ingestion,
+storage, embeddings, reranking and infrastructure MCP services; it is not one
+gateway endpoint. Hindsight is an externally owned integration.
+
+A representative tool request follows agent → Switchyard → provider → agent.
+The agent executes the requested retrieval or sandbox tool, checks its result,
+and sends the resulting continuation through Switchyard. That continuation is
+classified again on the automatic route; an explicit alias stays explicit.
+Switchyard does not own tool authorization, workspace state, corpus publication
+or retries of executed tool effects. Retrieved text and execution output remain
+untrusted model input, not routing permissions.
+
+Correlate model calls using propagated request IDs. Agent run IDs, provider
+affinity, sandbox execution IDs, ingestion jobs and MCP sessions are separate
+identities. Source routes, rendered ConfigMaps and running image revisions are
+separate evidence; validate all affected owners when their shared contract changes.
+The parent monorepo's `daedalus-co-design` skill coordinates these checks and
+retains sanitized lessons. Repository tests remain the gateway's local contract.
+
 ## Provider configurations
 
 Selectable provider sources are every root-level `routes_*.toml` file. Discover
@@ -148,6 +171,11 @@ SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
 
 Without the built binary, HTTP transport tests are skipped. Older algorithm
 fixtures test compatibility separately from the current deployment policy.
+`tests/test_responses_transport.py` discovers native Responses aliases and checks
+both streaming modes, target defaults, caller reasoning overrides and tool-result
+IDs against a synthetic provider. Native Responses preserves the caller's stream
+choice even when a target supplies `stream = true`; the Chat restriction above
+is transport-specific. These fixtures do not verify real provider capabilities.
 
 Live probes require the intended configuration to be deployed first:
 

@@ -6,6 +6,13 @@
 **Primary implementation owner:** Daedalus agent team  
 **Integration dependency:** Switchyard routing and provider transport
 
+**Status:** unimplemented proposal, not a description of a supported privacy
+boundary. The current provider files use standalone per-request classification
+with `max`, `high`, `low` and `instant`; they do not expose the historical local
+aliases or retain a task-effort floor. Here, “context isolation” means a proposed
+agent enforcement mechanism. It is distinct from the `daedalus-context`
+repository, which owns ingestion, retrieval, embedding/reranking and MCP services.
+
 ## 1. Purpose
 
 Enable Daedalus to use different levels of model capability within a daily-summary workflow while keeping private information inside the trusted local environment. The local model may access the complete context that the user and existing application permissions authorize. Cloud models receive separate, bounded tasks containing only information permitted for external processing.
@@ -21,10 +28,10 @@ The daily-summary skill combines personal-source reads, public research, editori
 The current implementation creates several obstacles:
 
 1. The agent builds model requests from a shared history using `request.chat_history = history.clone()` in `builder/runtime/src/agent.rs`. Changing the model carries earlier private messages and tool results to the new destination.
-2. Switchyard's current classifier policy assigns non-sensitive daily summaries at least `xhigh` for the entire task. The named-target patch retains the selected task target even for efficient stage decisions. An initial `xhigh` choice therefore prevents routine steps from dropping to a cheaper target.
+2. Switchyard's automatic route classifies each request and tool continuation independently. It has no retained task-effort floor. Classification can change capability preferences, but it does not isolate context or restrict outbound destinations.
 3. The Daedalus workflow leaves effort selection to the automatic `daedalus` route when `model_profile` is omitted. Explicit canonical effort levels remain fixed; retired `default`, `deep`, `deep_max`, and `none` profiles are rejected. Task routing must preserve that explicit intent.
 4. The skill reads Gmail, Calendar, and potentially personal health memory early. A public-news step later in the same history can still contain private information.
-5. Current Composite fallback can move a `local` selection to a cloud capable target. Local selection is currently a preference, not an enforced destination restriction.
+5. Standalone fallback uses the selected route's `default_target`; current provider files expose no local destination contract. Historical Composite configurations can move a local selection to a cloud target. Neither behavior implements the destination restrictions proposed here.
 
 Disabling session retention alone does not address these problems. The required change is to retain workflow state locally while constructing distinct model contexts for separately scoped work.
 
@@ -108,7 +115,7 @@ No new user confirmation is required for routine work already authorized by the 
 
 **ROUTE-01:** Privacy eligibility must be resolved before capability selection. A `LOCAL_ONLY` request must be limited to configured trusted local destinations. The destination registry must identify actual provider endpoints and their trust designation; a target named `local` is not sufficient evidence of locality.
 
-**ROUTE-02:** For an externally permitted task, choose capability according to the next bounded unit of work. Preserve the overall briefing requirements locally without applying an unconditional `xhigh` minimum to every worker call.
+**ROUTE-02:** For an externally permitted task, choose capability according to the next bounded unit of work. Preserve the overall briefing requirements locally without applying an unconditional high-effort minimum to every worker call.
 
 **ROUTE-03:** The runtime must convey a trusted, versioned destination policy to Switchyard, or use an equivalent enforceable route contract. End-user headers, prompt text, tool output, and worker output must not be able to forge or widen that policy. The exact authenticated transport mechanism is an implementation choice.
 
@@ -143,14 +150,17 @@ These assignments are candidates for measurement, not established quality guaran
 | Unit of work | Candidate capability | Context boundary |
 | --- | --- | --- |
 | Coordinator planning and personal-source interpretation | Local model | Complete authorized context |
-| Routine public retrieval and mechanical follow-ups | `low` or `medium` | Isolated public task |
+| Routine public retrieval and mechanical follow-ups | `low` | Isolated public task |
 | Public source comparison and coverage decisions | `high` | Isolated public task |
-| Difficult public editorial synthesis and structured section drafting | `xhigh` | Isolated public task |
+| Difficult public editorial synthesis and structured section drafting | `high` | Isolated public task |
 | Exceptional public reasoning or difficult recovery | `max` | Isolated public task |
 | Combining public findings with personal material | Local model | Complete authorized context |
 | HTML rendering and structural validation | Deterministic renderer | Local edition data |
 
-`instant` remains appropriate for simple social exchanges. It is not the initial default for source verification, tool orchestration, or briefing composition.
+These rows use the four task categories. Provider-specific explicit aliases and
+native reasoning settings remain separate contracts. `instant` remains
+appropriate for simple social exchanges. It is not the initial default for
+source verification, tool orchestration, or briefing composition.
 
 The optimization target is total cost and completion time per successful briefing at acceptable quality. Tool execution often does not use the answering model. Measure model calls that plan tools and interpret results separately from tool latency and any models invoked internally by tools.
 
