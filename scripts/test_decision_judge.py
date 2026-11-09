@@ -232,7 +232,7 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "routes", type=Path, nargs="?", default=Path("routes_custom.toml")
+        "routes", type=Path, help="Selected provider configuration from routes_*.toml"
     )
     parser.add_argument("--route", default="stage", help="TOML route table name")
     parser.add_argument("--base-url", help="Override the target for a port-forward")

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := validate
 
 CHART_DIR := charts/switchyard
-ROUTES_FILE ?= routes_custom.toml
+ROUTES_FILE ?=
 SWITCHYARD_COMMIT := 336196f6fbfc97ddc71c1700f6092e564e9f23c2
 IMAGE_REPOSITORY ?= daedalus.ddns.me:5050/btuttle/switchyard
 IMAGE_TAG ?= v0.3.0
@@ -23,7 +23,7 @@ TEST_ROUTES_FILE := $(ROUTES_FILE)
 ifneq ($(filter test,$(MAKECMDGOALS)),)
 TEST_ROUTE_ARGS := $(filter %.toml,$(MAKECMDGOALS))
 ifneq ($(word 2,$(TEST_ROUTE_ARGS)),)
-$(error Use one TOML file: make test routes_custom.toml)
+$(error Use one TOML file: make test routes_PROVIDER.toml)
 endif
 ifneq ($(TEST_ROUTE_ARGS),)
 TEST_ROUTES_FILE := $(TEST_ROUTE_ARGS)
@@ -38,6 +38,7 @@ endif
 validate: helm-lint helm-template
 
 test:
+	@test -n "$(TEST_ROUTES_FILE)" || { echo 'Select a provider with ROUTES_FILE or a TOML argument. Available: $(ROUTE_FILES)' >&2; exit 64; }
 	@python3 scripts/test_routes.py "$(TEST_ROUTES_FILE)" \
 		--base-url "$(TEST_BASE_URL)" \
 		--context "$(EXPECTED_CONTEXT)" \
@@ -45,6 +46,7 @@ test:
 		--timeout "$(TEST_TIMEOUT)" --max-output-tokens "$(TEST_MAX_OUTPUT_TOKENS)"
 
 helm-lint:
+	@test -n "$(ROUTES_FILE)" || { echo 'Set ROUTES_FILE. Available: $(ROUTE_FILES)' >&2; exit 64; }
 	@set -euo pipefail; \
 	routes_tmp_dir="$$(mktemp -d)"; trap 'rm -rf -- "$$routes_tmp_dir"' EXIT; \
 	bash scripts/render_routes.sh "$(ROUTES_FILE)" "$$routes_tmp_dir/routes.toml"; \
@@ -54,6 +56,7 @@ helm-lint:
 		--set-file "config.routesToml=$$routes_tmp_dir/routes.toml"
 
 helm-template:
+	@test -n "$(ROUTES_FILE)" || { echo 'Set ROUTES_FILE. Available: $(ROUTE_FILES)' >&2; exit 64; }
 	@set -euo pipefail; \
 	routes_tmp_dir="$$(mktemp -d)"; trap 'rm -rf -- "$$routes_tmp_dir"' EXIT; \
 	bash scripts/render_routes.sh "$(ROUTES_FILE)" "$$routes_tmp_dir/routes.toml"; \
@@ -74,6 +77,7 @@ publish: image
 	docker push $(LOCAL_IMAGE)
 
 deploy:
+	@test -n "$(ROUTES_FILE)" || { echo 'Set ROUTES_FILE. Available: $(ROUTE_FILES)' >&2; exit 64; }
 	ROUTES_FILE=$(ROUTES_FILE) \
 	IMAGE_REPOSITORY=$(IMAGE_REPOSITORY) \
 	IMAGE_TAG=$(IMAGE_TAG) \

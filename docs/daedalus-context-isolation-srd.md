@@ -216,7 +216,7 @@ Relevant source locations, relative to their repositories:
 - Daedalus `protocol/model-profile.schema.json`: existing user profile contract; keep internal task policy distinct unless an intentional versioned API change is required.
 - Daedalus `skills/daily-summary/SKILL.md` and its references: personal-source sequence, evidence requirements, edition schema, and rendering contract.
 - Switchyard `patches/decision-api-classifier.patch`: named-target retention, classifier payload construction, and fallback behavior.
-- Switchyard `routes_custom.toml` and `routes_openai.toml`: automatic choices, task criteria, and provider target mappings.
+- Switchyard discovered `routes_*.toml` files: automatic choices, task criteria, and provider target mappings.
 
 Existing interfaces cited here describe the implementation inspected for this proposal. Task policies, context classifications, and worker contracts above are new requirements.
 

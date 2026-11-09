@@ -1,12 +1,11 @@
 # Standalone decision routing
 
-Prepared on 2026-11-04 and subsequently deployed. The 2026-11-05
-[input-budget update](decision-input-limits.md) requires a new image rebuild.
-
-Both `routes_custom.toml` and `routes_openai.toml` use a standalone native
-`decision_api` route for `daedalus`, with `classify_trigger = "every_request"`
-and `default_target = "xhigh"`. The `stage` table name remains for tooling;
-`[routes.stage.stage]` and its tool semantics have been removed.
+Provider files discovered through `routes_*.toml` use the standalone native
+`decision_api` route for `daedalus`, with `classify_trigger = "every_request"`.
+The target categories are max, high, low and instant; `default_target`, explicit
+aliases and native provider settings are defined independently in each file.
+Select a provider explicitly for validation, probing and deployment. The `stage`
+table name remains for tooling; no `[routes.stage.stage]` is needed.
 
 The decision model judges the next response from the task and latest tool
 context. Each automatic request, including a tool continuation in the same
@@ -21,8 +20,7 @@ service addresses, public aliases and ports are preserved. Caller-supplied
 reasoning effort still overrides a selected target's default; QA should omit
 that override when measuring automatic effort changes.
 
-The automatic privacy preference remains a preference: judge/provider failures
-can select a cloud default. Use the explicit local route for local-only answering.
+Routing does not provide a local-processing or privacy boundary.
 The judge receives the opening task, latest user instruction and six recent
 messages. The input-budget update discovers the hosted context limit and
 truncates judge-only state to fit, using the hosted tokenizer. Unsupported media
@@ -53,15 +51,14 @@ quality calibration.
 
 ## QA after maintenance
 
-1. Build an image from this Dockerfile. The old deployed binary cannot parse the
-   new standalone route type. Promote the image and matching route file together
-   through the existing deployment workflow and capability gate.
-2. Run `make test routes_custom.toml` (or the OpenAI profile) for route smoke
+1. Validate the selected provider file against the intended built image. Promote
+   compatible image/configuration together through the deployment capability gate.
+2. Run `make test routes_fireworks.toml` (or the OpenAI profile) for route smoke
    checks. This does not run the separate 20-question judge probe.
 3. Run the 20-question probe against a reachable decision service using the
    command below. This checks the question and score gates only.
 4. Replay representative multi-step tasks against the automatic alias and fixed
-   `daedalus/xhigh`. Include healthy continuations, failures requiring recovery,
+   `daedalus/high`. Include healthy continuations, failures requiring recovery,
    difficult synthesis after successful tools, and local-sensitive work. Record
    the winning label, probability, accepted flag, selected target, fallback
    reasons, task outcomes, tool correctness, latency and token use per call.
@@ -70,7 +67,7 @@ quality calibration.
    now incurs discovery/classification latency within the existing 2-second budget.
 
 ```bash
-python3 scripts/test_decision_judge.py routes_custom.toml \
+python3 scripts/test_decision_judge.py routes_fireworks.toml \
   --base-url http://127.0.0.1:30090/v1 --output /tmp/decision-routing-probe.json
 ```
 

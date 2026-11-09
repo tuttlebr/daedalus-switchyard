@@ -11,347 +11,172 @@ Responses (`/v1/responses`), and Anthropic Messages (`/v1/messages`), plus
 `/v1/models`, `/health`, and `/metrics`. The routes below describe the repository
 configuration; a running release uses the route file selected at deployment.
 
-## Available configurations
+## Provider configurations
 
-Only two `routes_*.toml` deployment sources are currently present:
+Selectable provider sources are every root-level `routes_*.toml` file. Discover
+that inventory instead of maintaining a fixed provider list:
 
-| Configuration | Answering model | Upstream transport | Required credential | Automatic fallback |
-| --- | --- | --- | --- | --- |
-| [routes_custom.toml](routes_custom.toml) (default) | DeepSeek V4.1 Flash 1017 Ultrafast | `openai_chat` at `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | `high` |
-| [routes_openai.toml](routes_openai.toml) | `gpt-6-luna` | `openai_responses` at `https://api.openai.com/v1` | `OPENAI_API_KEY` | `medium` |
+```bash
+ls routes_*.toml
+```
 
-Both files use the decision service at
-`http://decision-api.daedalus.svc.cluster.local:30000/v1` for automatic selection.
-Neither file defines a local answering target or requires `LOCAL_API_KEY`.
-The earlier CoreWeave, Inception, and local-only route files are no longer
-available. `routes_custom.toml.bk` is a backup, not a selectable Make variant.
+Select a file explicitly for validation, probes and deployment. No provider is
+chosen by filename order or an implicit default. Adding a provider file adds it
+to the configuration contract tests and creates its `deploy-route_<provider>`
+Make target. Each file owns its clients, credentials, target models, reasoning
+payloads, public aliases and fallback. Check those fields when onboarding a
+provider; matching profile names do not establish equivalent behavior.
 
-The Helm chart's embedded `config.routesToml` remains an older GLM 5.2
-`llm_classifier` example. The Makefile and deployment script override it with
-the selected file. Direct Helm use must also supply
-`--set-file config.routesToml=<rendered routes file>` (see
-[header environment variables](#header-environment-variables)) and the corresponding
-`apiKeySecret.keys` to reproduce either configuration above.
+The chart's embedded `config.routesToml` is an older GLM classifier example.
+Direct Helm use must supply `--set-file config.routesToml=<rendered provider file>`
+and the corresponding `apiKeySecret.keys`, just as the deployment script does.
 
-### Public model routes
+### Classification and public aliases
 
-The custom DeepSeek configuration exposes five model IDs: automatic `daedalus`
-and four distinct passthrough settings. The OpenAI variant retains its separate
-six-profile interface; available profiles depend on the selected route file.
+Automatic `daedalus` routing classifies the next response into four categories:
 
-| Requested model | Custom DeepSeek effort | OpenAI effort |
-| --- | --- | --- |
-| `daedalus` | Automatic selection | Automatic selection |
-| `daedalus/max` | `max` | `max` |
-| `daedalus/high` | `high` | `high` |
-| `daedalus/low` | `low` | `low` |
-| `daedalus/instant` | `none` (reasoning off) | `low` |
-| `daedalus/xhigh` | Not exposed | `xhigh` |
-| `daedalus/medium` | Not exposed | `medium` |
-
-[Fireworks documents](https://docs.fireworks.ai/api-reference/post-chatcompletions)
-three named DeepSeek V4.1 thinking tiers: low, high and max. Its medium and xhigh
-inputs both select high. The custom file therefore exposes only those distinct
-settings plus reasoning-off as instant. None remains a provider wire value, not
-a public profile. These names describe requested effort, not guaranteed latency
-or answer quality. Trusted callers can override target defaults.
-
-Automatic routing still classifies six **task categories**. They are not six
-models or six distinct provider settings:
-
-| Task category | Selected custom target |
+| Category | Work requirements |
 | --- | --- |
-| instant | instant |
-| low | low |
-| medium, high, xhigh | high |
-| max | max |
+| `instant` | Greetings, acknowledgments and literal repetition |
+| `low` | Mechanical retrieval, transformations and predictable tool steps |
+| `high` | Explanation, synthesis, implementation, research, debugging and deep analysis |
+| `max` | Exceptional reasoning or concrete high-impact decisions |
 
-Uncertainty and classifier failure use high. The classifier re-evaluates every
-model request, including tool continuations. Explicit routes bypass it. All
-routes enable tools and reasoning support; explicit routes also declare image
-support and a 1,048,576-token context window. The deployment gate tests generation
-and tools and reports context metadata; declarations alone do not prove capability.
+Categories are distinct from explicit aliases and provider-native effort values.
+The shipped agent exposes `max`, `high`, `low` and `instant`. A provider may retain
+additional explicit aliases, such as OpenAI's `medium` and `xhigh`, without adding
+classifier categories. Existing passthrough aliases bypass classification.
+Public `none` is retired; a provider-native value with that spelling would be a
+separate wire setting, not an alias.
 
-The original [optimization evidence](docs/investigations/routes-optimization-2026-11-06/README.md)
-used DeepSeek for routine tasks and Kimi for harder tasks. It explains the old
-cross-model profile mapping; it does not validate a reversed effort ordering
-when every target uses DeepSeek.
+Every automatic request is classified again, including tool continuations.
+Uncertain, below-gate, timeout and invalid decisions use the selected file's
+`default_target`; it need not share a classifier category's name. Provider failure
+tries that default only when it differs from the selected target. There is no
+retained effort floor or general cross-provider failover.
 
-#### Migrating the custom configuration
-
-- Replace `daedalus/medium` and `daedalus/xhigh` with `daedalus/high`, or request
-  `daedalus` for automatic routing. They are removed, not silently aliased.
-- `daedalus/high` now requests high effort. Previously it requested low; choose
-  `daedalus/low` if that previous provider behavior is required.
-- The shipped agent workflow exposes `instant`, `low`, `high`, and `max`.
-  Migrate explicit `model_profile` values and custom request/skill mappings in
-  the same rollout. The generic agent schema still supports medium/xhigh for
-  other providers, but unconfigured profiles are rejected before generation.
-- Deploy matching agent workflow and gateway routes together. Old and new
-  configurations share high's name but not its previous effort default.
-
-`daedalus/deep`, `daedalus/none`, `daedalus/local`, and
-`daedalus/hindsight-local` remain absent. Current routes do not provide local-only
-answering.
+The four-category migration preserves target models/bodies, explicit aliases,
+retained probability gates and fallbacks. Provider-specific native effort may
+differ from the profile label: inspect the actual target `extra_body`. In
+particular, `instant` does not promise disabled reasoning. Thresholds measure
+classifier preference, not answer correctness, and category names do not prove
+latency or cost ordering. Use matched quality/latency/cost evaluation before
+claiming an improvement or tuning provider mappings.
 
 ```mermaid
 flowchart LR
   A[Agent or API client] --> B[Switchyard]
-  B -->|daedalus| C[Six task categories]
-  C --> D[instant / low / high / max]
-  B -->|Explicit custom profile| D
-  D --> E[DeepSeek: none / low / high / max]
+  B -->|daedalus| C[instant / low / high / max]
+  C --> D[Configured provider targets]
+  B -->|Explicit alias| D
+  D --> E[Provider-native payload]
 ```
 
-### Provider defaults and affinity
+### Provider transport and headers
 
-The custom configuration uses DeepSeek Ultrafast for all four settings. All
-custom targets use `reasoning_history =
-"interleaved"`, retaining reasoning within the current tool turn while clearing
-it across user turns. Each sets `context_length_exceeded_behavior = "truncate"`
-and leave `stream` unset so the caller controls streaming. A target-level
-`stream = true` in this build incorrectly overrides explicit non-streaming
-requests. For example:
+Target `id` identifies a routing choice; `model` identifies the upstream model.
+`extra_body` supplies defaults through a shallow top-level merge. Trusted caller
+fields take precedence, including reasoning effort. Responses requests are
+translated to Chat for Chat clients; native Responses clients use that transport.
+Preserve tool-call/result IDs, reasoning history and terminal stream handling.
+Leave `stream` unset on Chat targets: a target-level default overrides explicit
+non-streaming requests in this build. Do not add Responses-only `truncation` to
+Chat target defaults.
 
-```toml
-[targets.high]
-id = "high"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
-llm_client = "fireworks"
-extra_body = { reasoning_effort = "high", context_length_exceeded_behavior = "truncate", reasoning_history = "interleaved" }
-```
+Configured provider affinity headers are separate from request correlation and
+routing sessions. The gateway preserves standard `user` through Responses-to-Chat
+translation and allowlists `x-request-id`. Inbound arbitrary provider-affinity
+headers are not forwarded with server-owned credentials.
 
-The OpenAI targets all use `gpt-6-luna`, with `text.verbosity = "low"`,
-`reasoning.summary = "concise"`, `store = false`, and `stream = true`.
-Effort is supplied through `reasoning.effort`; `instant` and `low` currently
-have identical target defaults.
-
-Target `id` identifies the routing choice; `model` identifies the upstream
-model. `extra_body` supplies defaults through a shallow top-level merge.
-Caller-supplied fields take precedence, including explicit reasoning effort;
-a route name does not force that effort when the caller overrides it.
-Responses requests are translated to Chat Completions for Fireworks, including
-tool calls/results and reasoning history. OpenAI uses native Responses transport.
-Do not add the Responses-only `truncation` field to Fireworks target defaults.
-
-The custom client sets `x-multi-turn-session-id` and `x-session-affinity` from
-`${GLOBAL_SESSION_ID}`, resolved during validation/deployment from the caller's
-environment or `.env`. Both headers share the same value for all requests. This groups
-traffic under a shared provider affinity key. The OpenAI client has no configured
-extra headers. These are server-configured headers; inbound provider-affinity
-headers are not forwarded with server-owned credentials. The patched gateway
-preserves the standard `user` field through Responses-to-Chat translation and
-allowlists the caller's `x-request-id`. `x-switchyard-session-id` is separate
-routing state and is not required by the current standalone classifier.
-
-### Header environment variables
-
-`routes_custom.toml` uses:
-
-```toml
-extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-affinity = "${GLOBAL_SESSION_ID}" }
-```
-
-Set the non-secret shared ID in `.env` or the calling environment:
+Some provider files use `${GLOBAL_SESSION_ID}` in `llm_clients.*.extra_headers`.
+Set it in the environment or `.env` when required by the selected file. Rendering
+substitutes only those header values, once. Caller environment overrides `.env`;
+missing/empty values, malformed references and control characters fail before
+cluster changes. Rendered headers become ConfigMap values, not API-key Secret
+entries. Changing a configured affinity ID requires redeployment.
 
 ```bash
-GLOBAL_SESSION_ID=your-shared-session-id
+bash scripts/render_routes.sh routes_fireworks.toml /tmp/switchyard-routes.toml
 ```
 
-`make validate`, `make helm-lint`, `make helm-template`, and `make deploy` render
-`${NAME}` references only inside `llm_clients.*.extra_headers` values. Exported
-caller values take precedence over `.env`, including an explicitly empty value
-(which fails validation). Missing or empty variables, malformed references, and
-control characters in substituted values fail before Helm or cluster changes.
-Prompts, model names, credential references and other fields are not interpolated.
-Substitution is a single pass; variable contents are never evaluated as shell code.
-Existing literal headers continue to work.
+The server does not expand placeholders itself. Direct server/Helm invocation
+must use the rendered file. Provider credentials remain in their configured
+environment variables, discovered by `scripts/list_api_key_envs.py`.
 
-The source TOML remains a template. The rendered copy contains literal headers
-in the ConfigMap; these variables are not added to the API-key Secret or container
-environment. Changing the ID requires redeployment. The server itself does not
-expand placeholders, so direct Helm/server use must first render a copy:
+## Automatic decision service
 
-```bash
-bash scripts/render_routes.sh routes_custom.toml /tmp/switchyard-routes.toml
-```
-
-Use that output for `--set-file config.routesToml=...` or the server's `--config`.
-The wrapper loads the repository's `.env` with the same Bash syntax used by the
-deployment script. Its Python helper can also run directly with already-exported
-variables: `python3 scripts/render_routes.py SOURCE OUTPUT`.
-
-## Automatic reasoning routing
-
-Both files retain the table name `[routes.stage]`, but its type is
-`decision_api`, not the historical stage or Composite algorithm. Every request
-to `daedalus` is classified anew, including tool continuations and retries.
-There is no retained task floor, stage override, or recovery hold.
-
-The classifier chooses among six named choices plus `uncertain`:
-
-| Choice | Custom minimum winning probability | OpenAI minimum | Custom intended work |
-| --- | ---: | ---: | --- |
-| `instant` | 0.90 | 0.90 | Trivial greetings, acknowledgments, verbatim repetition |
-| `low` | 0.60 | 0.80 | Mechanical extraction, direct facts, predictable tool loops |
-| `medium` | 0.50 | 0.70 | Ordinary implementation, research, synthesis and verification |
-| `high` | 0.50 | 0.60 | Hard debugging, multi-step inference and adaptive investigation |
-| `xhigh` | 0.55 | 0.55 | Deep analysis, conflicting evidence and independent cross-checks |
-| `max` | 0.50 | 0.50 | Exceptional difficulty or concrete high-impact work |
-
-These gates are policy settings, not calibrated probabilities of task success.
-Uncertain or below-gate choices, classifier failures, and timeouts use the
-actual `default_target`: **`xhigh` for custom; `medium` for OpenAI**. An
-answering-provider failure tries only that default when it differs from the
-selected target; it does not cycle through all choices or switch providers.
-The next automatic request is classified again.
-
-Shared classifier settings are:
-
-```toml
-[routes.stage.classifier]
-type = "decision_api"
-base_url = "http://decision-api.daedalus.svc.cluster.local:30000/v1"
-model = "auto"
-classify_trigger = "every_request"
-timeout_ms = 2000
-recent_turn_window = 6
-max_input_tokens = "auto"
-truncate_input = true
-max_request_bytes = 65536
-# Keep instructions, uncertain_criteria and all choices from the selected file.
-```
-
-With `model = "auto"`, the gateway discovers the decision service's single
-served model through `/v1/models` on each classification. An explicit model ID
-pins selection instead. The service receives SystemOne `state` and a typed
-choice question named `effort`. The gateway validates question/options,
-normalized probabilities, winning choice, response identity and native usage.
-Optional SGLang `x_label_mass` metadata is accepted but does not gate routing.
+The `[routes.stage]` table uses `decision_api`. With `model = "auto"`, the gateway
+discovers the service's served model through `/v1/models` on each classification.
+The service receives SystemOne state and an `effort` choice question containing
+the four categories plus `uncertain`. The gateway validates identity, options,
+normalized probabilities and usage; optional `x_label_mass` does not gate routing.
 
 Judge context includes client instructions, the opening task, latest ordinary
-user instruction, six recent messages and available tool names; private
-reasoning is omitted. Automatic input budgeting reads the hosted context limit
-and counts the complete decision prompt through `/v1/tokenize`. It trims only
-classifier context, leaving answer requests intact. With truncation enabled,
-the old `max_request_bytes` rejection gate is bypassed. Discovery, tokenization,
-fitting and scoring share the two-second deadline. Missing metadata,
-unsupported media or tokenization failure use the configured fallback.
-See [decision input limits](docs/decision-input-limits.md) and
-[standalone routing and QA](docs/standalone-decision-routing.md) for implementation
-details; historical model mappings in those records are not the current route inventory.
+user instruction, six recent messages and tool names; private reasoning is
+omitted. Automatic input budgeting reads hosted limits and tokenizes the complete
+decision prompt. Truncation trims only judge context, preserving the answer
+request. Discovery, tokenization, fitting and scoring share the configured
+deadline. Unsupported media or unavailable tokenization uses the fallback.
+See [input limits](docs/decision-input-limits.md) and
+[standalone routing](docs/standalone-decision-routing.md).
 
-Neither classifier currently sets `api_key_env`. To enable service-owned bearer
-authentication, add `api_key_env = "DECISION_API_KEY"` and supply the credential;
-`scripts/list_api_key_envs.py` discovers classifier keys as well as provider keys.
-Caller credentials and arbitrary headers are not forwarded to the judge.
-
-### Known configuration discrepancies
-
-The custom prompt now matches the executable fallback and describes task
-requirements without embedding provider model names that can drift. Its judge
-is discovered from the internal decision service; answering stays on Fireworks.
-
-The separate OpenAI configuration was not changed by the custom optimization.
-Its prompt still describes Fireworks answering models, high effort for instant,
-an instant fallback and a Rune judge, while its executable settings use
-`gpt-6-luna`, low effort for instant, medium fallback and judge discovery. Its
-max comment also incorrectly describes the 0.50 gate as absent. Treat the target
-fields and numeric gates as authoritative. Neither configuration supplies a
-local-processing answering boundary.
-
-## Repository layout and patches
-
-- `routes_custom.toml` and `routes_openai.toml`: selectable clients, targets and routes.
-- `charts/switchyard/`: Helm chart, workload, Service and network policies.
-- `Dockerfile` and `patches/`: pinned upstream build and local extensions.
-- `scripts/deploy.sh` and `scripts/deploy_state.py`: capability checks, deployment,
-  backups and recovery.
-- `scripts/check_capabilities.py`: provider generation/tool and context checks.
-- `scripts/render_routes.sh` and `scripts/render_routes.py`: header environment loading and TOML rendering.
-- `scripts/test_routes.py`: live route smoke checks.
-- `scripts/test_decision_judge.py`: synthetic judge contract/policy probes.
-- `tests/`: configuration, deployment and HTTP fixture regressions.
-- `docs/`: implementation notes and historical investigation records.
-
-The Dockerfile applies patches in order and runs focused Rust regressions before
-building the final server. Target-model aliases allow independent defaults for
-routes sharing a provider model. Fireworks patches translate assistant-history
-reasoning to `reasoning_content` and normalize tool-parameter presence constraints
-without discarding their original JSON Schema constraints. Structural credential
-redaction walks decoded JSON, including JSON inside tool arguments, so credential
-replacement cannot corrupt serialized stream events. Native decision patches
-add named choices, SGLang metadata support, model discovery, standalone routing
-and hosted input budgeting. Legacy Composite support remains in the binary.
-These configurations require the patched image built by this repository.
+Classifier service authentication uses optional `api_key_env`; the deployment
+key discovery includes it. Caller credentials and arbitrary headers are not
+forwarded to the judge. Routing grants no permissions or privacy guarantees.
 
 ## Validate and test
 
-Requires Python 3.11+, Helm and kubectl for chart validation:
+Use Python 3.11+, Bash 4+, Helm and kubectl. Select a file explicitly:
 
 ```bash
-make validate
-make validate ROUTES_FILE=routes_openai.toml
+make validate ROUTES_FILE=routes_fireworks.toml
+# Include new provider files automatically:
+for routes in routes_*.toml; do
+  make validate ROUTES_FILE="$routes"
+done
 ```
 
-This resolves header variables, discovers credential names, lints the chart, renders the selected routes
-into the `daedalus` namespace, and runs Kubernetes client-side dry-run validation.
-It does not validate routing policy or prove provider compatibility.
-
-The route smoke harness can be tested without provider credentials:
+Validation renders headers, discovers credential names, lints the chart and
+performs a client-side Kubernetes dry run. It does not verify provider capability
+or routing quality. The offline suite discovers every provider source:
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_route_smoke.py' -v
-```
-
-The broader suite includes HTTP fixtures that require the actual patched binary:
-
-```bash
+python3 -m unittest discover -s tests -v
 SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
   python3 -m unittest discover -s tests -v
 ```
 
-Some configuration/transport tests still assume removed local aliases or earlier
-provider mappings, notably `tests/test_bolt_local_routes.py`. The custom configuration assertions
-in `tests/test_fireworks_routes.py` were updated with this optimization. Those expectations need reconciliation with
-the current route files; the full suite should not be assumed to pass unchanged.
+Without the built binary, HTTP transport tests are skipped. Older algorithm
+fixtures test compatibility separately from the current deployment policy.
 
-To test a deployed configuration:
+Live probes require the intended configuration to be deployed first:
 
 ```bash
-make test routes_custom.toml
-make test
-make test ROUTES_FILE=routes_openai.toml
-make test routes_custom.toml TEST_BASE_URL=http://localhost:4000/v1
-make test routes_custom.toml TEST_TIMEOUT=180 TEST_MAX_OUTPUT_TOKENS=8192
-```
-
-The command sends one live, non-streaming `/v1/responses` request for every
-`[routes]` entry: `daedalus` and its six explicit profiles. It asks for `OK`,
-with a default 4096-token output budget and 120-second timeout per route.
-No reasoning effort is supplied. A pass requires a completed response with
-nonempty assistant text; any failed route produces a nonzero exit status.
-These are real provider requests, not an answer-quality benchmark.
-
-The local TOML supplies model IDs to test; the running server supplies policy
-and credentials. Deploy the intended file first: the tester does not deploy or
-compare the mounted configuration. By default it temporarily port-forwards
-`daedalus/service/switchyard:4000` using `EXPECTED_CONTEXT`. `TEST_NAMESPACE`
-and `TEST_SERVICE` override the destination. Supplying `TEST_BASE_URL` bypasses
-kubectl and accepts a URL with or without `/v1`.
-
-To probe the configured judge with 20 synthetic workloads:
-
-```bash
-kubectl -n daedalus port-forward service/decision-api 30090:30000
-# In another terminal:
-python3 scripts/test_decision_judge.py routes_custom.toml \
+make test routes_fireworks.toml
+make test ROUTES_FILE=routes_fireworks.toml TEST_BASE_URL=http://localhost:4000/v1
+python3 scripts/test_decision_judge.py routes_fireworks.toml \
   --base-url http://127.0.0.1:30090/v1 --output /tmp/decision-routing-probe.json
 ```
 
-This reports contract checks, winning labels and targets after probability gates.
-It does not execute the synthetic tasks or establish answering quality, latency
-savings or routing accuracy. `make test` does not run this probe.
+These are real model requests. Route smoke sends one non-streaming Responses
+request per configured alias, asks for `OK`, and defaults to 4096 output tokens
+and 120 seconds per route. A pass needs completed, nonempty text; it is not a
+quality benchmark. `TEST_TIMEOUT` and `TEST_MAX_OUTPUT_TOKENS` bound each request.
+Without `TEST_BASE_URL`, the harness temporarily port-forwards the selected
+context's `daedalus/service/switchyard:4000`. `TEST_NAMESPACE` and `TEST_SERVICE`
+override that destination. The judge probe checks question/score contracts,
+not answering correctness. Neither probe deploys or verifies loaded/source parity.
+
+## Repository layout
+
+- `routes_*.toml`: discovered provider clients, targets and routes.
+- `charts/switchyard/`: workload, Service and network policies.
+- `Dockerfile` and `patches/`: pinned upstream build and transport/routing extensions.
+- `scripts/deploy.sh`, `scripts/deploy_state.py`: capability gate, deployment and recovery.
+- `scripts/check_capabilities.py`: generation/tool and context checks.
+- `scripts/render_routes.*`: provider-header rendering.
+- `tests/`: all-provider configuration and synthetic HTTP regressions.
+- `docs/investigations/`: frozen historical evidence, not current deployment inputs.
 
 ## Build, publish, and deploy
 
@@ -362,24 +187,24 @@ ignored by Git. Caller environment values take precedence over `.env`; unrelated
 variables are ignored. Credentials become Kubernetes Secret keys, not Helm
 values or ConfigMap contents.
 
-The custom profile also requires `GLOBAL_SESSION_ID` for its shared affinity
+Providers with configured affinity placeholders require `GLOBAL_SESSION_ID` for shared affinity
 headers. `.env.example` includes this non-secret setting; keep the existing ID
 when migrating a deployment to preserve its affinity key.
 
-The currently available build/push/deploy targets are:
+For example, provider-specific build/push/deploy targets include:
 
 ```bash
-make deploy-route_custom
+make deploy-route_fireworks
 make deploy-route_openai
 ```
 
-The Makefile discovers these targets from `routes_*.toml`; there is no current
-`deploy-route_fireworks`, `deploy-route_local`, or `deploy-route_inception` target.
+The Makefile discovers these targets from `routes_*.toml`; new provider files
+create matching targets automatically.
 To build or publish separately, use `make image` or `make publish`. To deploy an
 already-published image:
 
 ```bash
-make deploy ROUTES_FILE=routes_custom.toml
+make deploy ROUTES_FILE=routes_fireworks.toml
 make deploy ROUTES_FILE=routes_openai.toml
 ```
 
@@ -387,7 +212,7 @@ Defaults and operator overrides:
 
 | Setting | Default |
 | --- | --- |
-| `ROUTES_FILE` | `routes_custom.toml` |
+| `ROUTES_FILE` | Required explicit provider file |
 | `IMAGE_REPOSITORY` | `daedalus.ddns.me:5050/btuttle/switchyard` |
 | `IMAGE_TAG` | `v0.3.0` |
 | `EXPECTED_CONTEXT` | `kubernetes-admin@kubernetes` |
@@ -481,7 +306,7 @@ curl http://switchyard.daedalus.svc.cluster.local:4000/v1/responses \
   -d '{"model":"daedalus","input":"Inspect and fix the failing tests."}'
 ```
 
-Use an explicit model such as `daedalus/medium` to bypass classification.
+Use an explicit model such as `daedalus/high` to bypass classification.
 Routed responses include `x-model-router-selected-model` and, when available,
 `x-model-router-rationale`. The selected-model header identifies the target,
 such as `high` or `xhigh`; the upstream request uses its configured `model`.

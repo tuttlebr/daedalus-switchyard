@@ -16,7 +16,7 @@ Deployment evidence must establish the actual serving artifact.
 | Route configuration  | Fixed local targets                |
 | -------------------- | ---------------------------------- |
 | `routes_openai.toml` | `local`, `hindsight_local` |
-| `routes_custom.toml` | `local`, `hindsight_local` |
+| Historical hosted-provider variant | `local`, `hindsight_local` |
 
 Both profiles use the existing Chat client and `LOCAL_API_KEY` mechanism at
 `http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1`.

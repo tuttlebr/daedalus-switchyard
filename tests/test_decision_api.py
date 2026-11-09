@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tomllib
 import unittest
 from unittest.mock import patch
 from contextlib import contextmanager
@@ -32,10 +33,10 @@ def verdict():
 
 class ProbeSchemaTest(unittest.TestCase):
     def test_probe_cli_reads_standalone_default_target(self):
-        for name in ("routes_custom.toml", "routes_openai.toml"):
-            with self.subTest(profile=name), patch("sys.argv", ["probe", str(ROOT / name)]), patch.object(probe, "probe", return_value=[]) as run:
+        for path in sorted(ROOT.glob("routes_*.toml")):
+            with self.subTest(profile=path.name), patch("sys.argv", ["probe", str(path)]), patch.object(probe, "probe", return_value=[]) as run:
                 self.assertEqual(probe.main(), 0)
-                self.assertEqual(run.call_args.args[2], "xhigh")
+                self.assertEqual(run.call_args.args[2], tomllib.loads(path.read_text())["routes"]["stage"]["default_target"])
                 self.assertEqual(run.call_args.args[0]["classify_trigger"], "every_request")
 
     def test_optional_metadata_and_clef_response(self):

@@ -209,7 +209,8 @@ class FireworksChatTransportTest(unittest.TestCase):
         process = None
         try:
             with tempfile.TemporaryDirectory() as directory:
-                source = (ROOT / "routes_custom.toml").read_text()
+                source_path = ROOT / ("routes_fireworks.toml" if composite == "standalone" else "tests/fixtures/legacy_transport.toml")
+                source = source_path.read_text()
                 # Pin this existing Clef fixture; automatic model replacement is
                 # covered by the dedicated decision gateway contract tests.
                 source = source.replace('model = "auto"', 'model = "Cloudflare/clef-flash"')
@@ -1276,8 +1277,9 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertEqual(request["model"], expected["model"])
 
     @staticmethod
-    def target_verdict(choice, probability=0.96):
-        config = tomllib.loads((ROOT / "routes_custom.toml").read_text())
+    def target_verdict(choice, probability=0.96, standalone=False):
+        path = ROOT / ("routes_fireworks.toml" if standalone else "tests/fixtures/legacy_transport.toml")
+        config = tomllib.loads(path.read_text())
         options = (*config["routes"]["stage"]["classifier"]["choices"], "uncertain")
         probabilities = {name: (1 - probability) / (len(options) - 1) for name in options}
         probabilities[choice] = probability
@@ -1319,17 +1321,17 @@ class FireworksChatTransportTest(unittest.TestCase):
                 captured.get(timeout=5)
                 self.assertTrue(captured.empty())
 
-    def test_custom_task_categories_share_high_without_duplicate_public_aliases(self):
-        for category in ("medium", "high", "xhigh"):
+    def test_current_four_categories_preserve_explicit_alias_inventory(self):
+        for category in ("instant", "low", "high", "max"):
             with self.subTest(category=category), self.router(
-                composite="standalone", verdict=self.target_verdict(category)
+                composite="standalone", verdict=self.target_verdict(category, standalone=True)
             ) as (url, captured, _config):
                 headers = self.request(url)
-                self.assertEqual(headers["x-model-router-selected-model"], "high")
+                self.assertEqual(headers["x-model-router-selected-model"], category)
                 path, _, _ = captured.get(timeout=5)
                 self.assertEqual(path, "/v1/systemone")
                 _, body, _ = captured.get(timeout=5)
-                self.assertEqual(body["reasoning_effort"], "high")
+                self.assertEqual(body["reasoning_effort"], _config["targets"][category]["extra_body"]["reasoning_effort"])
                 for removed in ("medium", "xhigh"):
                     with self.assertRaises(HTTPError) as error:
                         self.request(url, model="daedalus/" + removed)
@@ -1338,7 +1340,7 @@ class FireworksChatTransportTest(unittest.TestCase):
 
     def test_standalone_uses_real_profile_and_rejudges_streaming_tool_continuations(self):
         with self.router(
-            composite="standalone", verdict=self.target_verdict("low"), decision_auth=True
+            composite="standalone", verdict=self.target_verdict("low", standalone=True), decision_auth=True
         ) as (url, captured, config):
             route = config["routes"]["stage"]
             self.assertEqual(route["type"], "decision_api")

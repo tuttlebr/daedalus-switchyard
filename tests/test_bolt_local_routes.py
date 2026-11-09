@@ -1,4 +1,4 @@
-"""Resolve fixed local routes and exercise their Chat/Responses wire contract."""
+"""Check retired aliases and synthetic local Chat/Responses compatibility."""
 
 import json
 import os
@@ -8,66 +8,12 @@ from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = ("routes_openai.toml", "routes_custom.toml")
-ALIASES = ("daedalus/local", "daedalus/hindsight-local")
+PROFILES = tuple(path.name for path in sorted(ROOT.glob("routes_*.toml")))
 BOLT_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
-GATEWAY_URL = (
-    "http://inference-gateway-internal.daedalus-dynamo.svc.cluster.local:8000/v1"
-)
-
-
-def resolved(config, alias):
-    routes = [route for route in config["routes"].values() if route["id"] == alias]
-    if len(routes) != 1 or routes[0]["type"] != "passthrough":
-        raise AssertionError("local aliases require one fixed passthrough route")
-    target = config["targets"][routes[0]["target"]]
-    return routes[0], target, config["llm_clients"][target["llm_client"]]
 
 
 class BoltLocalRoutesTest(unittest.TestCase):
-    def test_all_local_aliases_send_bolt_requests_to_shared_gateway_in_both_profiles(self):
-        for profile in PROFILES:
-            config = tomllib.loads((ROOT / profile).read_text())
-            for alias in ALIASES:
-                with self.subTest(profile=profile, alias=alias):
-                    route, target, client = resolved(config, alias)
-                    self.assertNotIn("classifier", route)
-                    self.assertNotIn("capable_target", route)
-                    self.assertEqual(target["model"], BOLT_MODEL)
-                    self.assertEqual(target["llm_client"], "local")
-                    self.assertEqual(client["base_url"], GATEWAY_URL)
-                    self.assertEqual(client["format"], "openai_chat")
-                    self.assertEqual(client["api_key_env"], "LOCAL_API_KEY")
-
-    def test_local_reasoning_controls_are_typed_and_nonthinking_aliases_keep_defaults(
-        self,
-    ):
-        for profile in PROFILES:
-            config = tomllib.loads((ROOT / profile).read_text())
-            with self.subTest(profile=profile):
-                _, local, _ = resolved(config, "daedalus/local")
-                self.assertEqual(
-                    local["extra_body"],
-                    {
-                        "chat_template_kwargs": {
-                            "enable_thinking": True,
-                            "medium_effort": True,
-                        },
-                        "nvext": {"max_thinking_tokens": 256},
-                    },
-                )
-                self.assertIs(
-                    type(local["extra_body"]["nvext"]["max_thinking_tokens"]), int
-                )
-                self.assertNotIn("reasoning_effort", local["extra_body"])
-                for alias in ("daedalus/hindsight-local",):
-                    _, target, _ = resolved(config, alias)
-                    self.assertEqual(
-                        target["extra_body"],
-                        {"chat_template_kwargs": {"enable_thinking": False}},
-                    )
-
-    def test_retired_none_route_is_absent_from_both_profiles(self):
+    def test_retired_none_route_is_absent_from_all_providers(self):
         for profile in PROFILES:
             config = tomllib.loads((ROOT / profile).read_text())
             with self.subTest(profile=profile):
@@ -83,7 +29,13 @@ class BoltLocalWireTest(unittest.TestCase):
     def router(self):
         from test_fireworks_chat_transport import FireworksChatTransportTest
 
-        return FireworksChatTransportTest().router()
+        def bolt_defaults(source):
+            return source.replace(
+                'extra_body = { reasoning_effort = "medium", chat_template_kwargs = { enable_thinking = true } }',
+                'extra_body = { chat_template_kwargs = { enable_thinking = true, medium_effort = true }, nvext = { max_thinking_tokens = 256 } }',
+            )
+
+        return FireworksChatTransportTest().router(source_transform=bolt_defaults)
 
     def request(self, base, alias, api="chat", **extra):
         body = {"model": alias, "stream": True}

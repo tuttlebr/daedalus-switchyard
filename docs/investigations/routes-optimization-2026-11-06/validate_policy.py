@@ -29,7 +29,12 @@ CASES = {
 
 if __name__ == "__main__":
     judge.CASES = {name: prompt for name, (prompt, _) in CASES.items()}
-    route = tomllib.loads((ROOT / "routes_custom.toml").read_text())["routes"]["stage"]
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Historical rubric; select a matching route snapshot explicitly.")
+    parser.add_argument("--routes", type=Path, required=True)
+    args = parser.parse_args()
+    route = tomllib.loads(args.routes.read_text())["routes"]["stage"]
     rows = judge.probe(route["classifier"], "http://127.0.0.1:30090/v1", route["default_target"])
     for row in rows:
         row["allowed_targets"] = sorted(CASES[row["case"]][1])

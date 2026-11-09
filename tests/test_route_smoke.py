@@ -133,6 +133,17 @@ class RouteSmokeTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Use one TOML file", result.stderr)
 
+    def test_provider_selection_is_required_and_discovered(self):
+        for target in ("test", "validate", "deploy"):
+            result = self.run_command(["make", target, "ROUTES_FILE="])
+            self.assertNotEqual(result.returncode, 0)
+            for path in ROOT.glob("routes_*.toml"):
+                self.assertIn(path.name, result.stderr)
+        env = {**os.environ, "ROUTES_FILE": ""}
+        result = self.run_command(["bash", "scripts/deploy.sh"], env=env)
+        self.assertEqual(result.returncode, 64)
+        self.assertIn("Set ROUTES_FILE", result.stderr)
+
     def test_port_forward_arguments_and_cleanup(self):
         self.write_routes(["stage"])
         # A real child process makes tunnel cleanup observable without a cluster.

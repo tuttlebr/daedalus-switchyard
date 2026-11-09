@@ -60,7 +60,7 @@ in the TOML. It is suitable for a scheduled availability check; it is not a
 Kubernetes readiness probe.
 
 ```bash
-python3 scripts/check_capabilities.py routes_custom.toml \
+python3 scripts/check_capabilities.py routes_fireworks.toml \
   --timeout 60 --max-output-tokens 4096 --report /tmp/model-capabilities.json
 python3 -m unittest discover -s tests -p test_capabilities.py
 ```
