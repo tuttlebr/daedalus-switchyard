@@ -104,9 +104,11 @@ Target `id` identifies a routing choice; `model` identifies the upstream model.
 fields take precedence, including reasoning effort. Responses requests are
 translated to Chat for Chat clients; native Responses clients use that transport.
 Preserve tool-call/result IDs, reasoning history and terminal stream handling.
-Leave `stream` unset on Chat targets: a target-level default overrides explicit
-non-streaming requests in this build. Do not add Responses-only `truncation` to
-Chat target defaults.
+Leave `stream` unset on every target. A target-level default replaces the
+caller's choice whenever the request is translated between Chat and Responses,
+and forces streaming on callers that omit the field; only a same-format caller's
+explicit value survives it. Do not add Responses-only `truncation` to Chat target
+defaults.
 
 Configured provider affinity headers are separate from request correlation and
 routing sessions. The gateway preserves standard `user` through Responses-to-Chat
@@ -175,9 +177,13 @@ Without the built binary, HTTP transport tests are skipped. Older algorithm
 fixtures test compatibility separately from the current deployment policy.
 `tests/test_responses_transport.py` discovers native Responses aliases and checks
 both streaming modes, target defaults, caller reasoning overrides and tool-result
-IDs against a synthetic provider. Native Responses preserves the caller's stream
-choice even when a target supplies `stream = true`; the Chat restriction above
-is transport-specific. These fixtures do not verify real provider capabilities.
+IDs against a synthetic provider. `tests/test_stream_contract.py` calls every
+route of every provider file through both Chat and Responses with streaming on,
+off and omitted, and checks that the reply uses the mode the caller requested.
+It also drops the upstream connection mid-stream and checks the terminal
+`SwitchyardError` frame whose message starts with `upstream transport error: `;
+the Daedalus agent retries on that frame. These fixtures do not verify real
+provider capabilities.
 
 Live probes require the intended configuration to be deployed first:
 

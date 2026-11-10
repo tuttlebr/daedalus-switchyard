@@ -59,14 +59,15 @@ class ProviderRoutesTest(unittest.TestCase):
                 for target in config["targets"].values():
                     self.assertNotIn(target["model"], text)
 
-    def test_chat_payload_defaults_keep_caller_streaming_choice(self):
+    def test_payload_defaults_keep_caller_streaming_choice(self):
+        # A target stream default replaces the caller's choice whenever the
+        # request is translated between Chat and Responses or omits stream.
         for name, config in providers():
             for key, target in config["targets"].items():
-                if config["llm_clients"][target["llm_client"]]["format"] != "openai_chat":
-                    continue
                 with self.subTest(provider=name, target=key):
                     self.assertNotIn("stream", target.get("extra_body", {}))
-                    self.assertNotIn("truncation", target.get("extra_body", {}))
+                    if config["llm_clients"][target["llm_client"]]["format"] == "openai_chat":
+                        self.assertNotIn("truncation", target.get("extra_body", {}))
 
     def test_optional_classifier_credential_is_discovered_for_every_provider(self):
         spec = importlib.util.spec_from_file_location("key_envs", ROOT / "scripts/list_api_key_envs.py")

@@ -9,38 +9,38 @@ api_key_env = "OPENAI_API_KEY"
 id = "max"
 model = "gpt-6-luna"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { effort = "max", summary = "concise" }, store = false, stream = true }
+extra_body = { text = { verbosity = "low" }, reasoning = { effort = "max", summary = "concise" }, store = false }
 
 [targets.xhigh]
 id = "xhigh"
 model = "gpt-6-luna"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { effort = "xhigh", summary = "concise" }, store = false, stream = true }
+extra_body = { text = { verbosity = "low" }, reasoning = { effort = "xhigh", summary = "concise" }, store = false }
 
 [targets.high]
 id = "high"
 model = "gpt-6-luna"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { effort = "high", summary = "concise" }, store = false, stream = true }
+extra_body = { text = { verbosity = "low" }, reasoning = { effort = "high", summary = "concise" }, store = false }
 
 [targets.medium]
 id = "medium"
 model = "gpt-6-luna"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { effort = "medium", summary = "concise" }, store = false, stream = true }
+extra_body = { text = { verbosity = "low" }, reasoning = { effort = "medium", summary = "concise" }, store = false }
 
 [targets.low]
 id = "low"
 model = "gpt-6-luna"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { effort = "low", summary = "concise" }, store = false, stream = true }
+extra_body = { text = { verbosity = "low" }, reasoning = { effort = "low", summary = "concise" }, store = false }
 
 # Latency profile for simple interactions, also available by explicit route.
 [targets.instant]
 id = "instant"
 model = "gpt-6-luna"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { effort = "low", summary = "concise" }, store = false, stream = true }
+extra_body = { text = { verbosity = "low" }, reasoning = { effort = "low", summary = "concise" }, store = false }
 
 # ------------------------------------------------------------------------------
 [routes.stage]
