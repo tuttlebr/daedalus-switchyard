@@ -9,7 +9,14 @@ if [[ $# != 2 ]]; then
 fi
 render_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly render_script_dir
-render_header_names="$(python3 "${render_script_dir}/render_routes.py" "$1" --list-env)"
+# Compose once before loading .env. Both variable discovery and rendering use
+# this snapshot, even if a source fragment changes while .env is being loaded.
+render_snapshot_dir="$(mktemp -d)"
+readonly render_snapshot_dir
+trap 'rm -rf -- "${render_snapshot_dir}"' EXIT
+python3 "${render_script_dir}/render_routes.py" "$1" "${render_snapshot_dir}/source.toml" \
+  --compose-only --check-output "$2"
+render_header_names="$(python3 "${render_script_dir}/render_routes.py" "${render_snapshot_dir}/source.toml" --list-env)"
 # Names are validated identifiers; keep caller values in prefixed scalars.
 while IFS= read -r render_header_name; do
   if [[ -n "${render_header_name}" ]]; then
@@ -37,4 +44,4 @@ while IFS= read -r render_header_name; do
   fi
 done <<< "${render_header_names}"
 
-python3 "${render_script_dir}/render_routes.py" "$1" "$2"
+python3 "${render_script_dir}/render_routes.py" "${render_snapshot_dir}/source.toml" "$2"

@@ -21,6 +21,8 @@ from urllib.request import Request, urlopen
 
 import tomllib
 
+from scripts.render_routes import compose_source, load_config
+
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
 
@@ -210,7 +212,7 @@ class FireworksChatTransportTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 source_path = ROOT / ("routes_fireworks.toml" if composite == "standalone" else "tests/fixtures/legacy_transport.toml")
-                source = source_path.read_text()
+                source = compose_source(source_path)
                 # Pin this existing Clef fixture; automatic model replacement is
                 # covered by the dedicated decision gateway contract tests.
                 source = source.replace('model = "auto"', 'model = "Cloudflare/clef-flash"')
@@ -1279,7 +1281,7 @@ class FireworksChatTransportTest(unittest.TestCase):
     @staticmethod
     def target_verdict(choice, probability=0.96, standalone=False):
         path = ROOT / ("routes_fireworks.toml" if standalone else "tests/fixtures/legacy_transport.toml")
-        config = tomllib.loads(path.read_text())
+        config = load_config(path)
         options = (*config["routes"]["stage"]["classifier"]["choices"], "uncertain")
         probabilities = {name: (1 - probability) / (len(options) - 1) for name in options}
         probabilities[choice] = probability

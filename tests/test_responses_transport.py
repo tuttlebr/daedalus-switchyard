@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
+from scripts.render_routes import compose_source
+
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
 
@@ -67,7 +69,7 @@ class ResponsesTransportTest(unittest.TestCase):
         thread.start()
         process = None
         try:
-            source = path.read_text()
+            source = compose_source(path)
             config = tomllib.loads(source)
             environment = os.environ.copy()
             for client in config["llm_clients"].values():
@@ -113,7 +115,7 @@ class ResponsesTransportTest(unittest.TestCase):
     def test_native_aliases_preserve_streaming_effort_and_tool_continuations(self):
         exercised = 0
         for path in sorted(ROOT.glob("routes_*.toml")):
-            config = tomllib.loads(path.read_text())
+            config = tomllib.loads(compose_source(path))
             aliases = [
                 route for route in config["routes"].values()
                 if route["type"] == "passthrough"

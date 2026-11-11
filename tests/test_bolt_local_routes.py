@@ -2,10 +2,11 @@
 
 import json
 import os
-import tomllib
 import unittest
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
+
+from scripts.render_routes import load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = tuple(path.name for path in sorted(ROOT.glob("routes_*.toml")))
@@ -15,7 +16,7 @@ BOLT_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB"
 class BoltLocalRoutesTest(unittest.TestCase):
     def test_retired_none_route_is_absent_from_all_providers(self):
         for profile in PROFILES:
-            config = tomllib.loads((ROOT / profile).read_text())
+            config = load_config(ROOT / profile)
             with self.subTest(profile=profile):
                 self.assertNotIn("none", config["targets"])
                 self.assertNotIn("daedalus/none", {r["id"] for r in config["routes"].values()})

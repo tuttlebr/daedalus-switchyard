@@ -1,0 +1,7 @@
+# Select reusable components. Later files override earlier files; this file wins last.
+include = [
+  "config/llms/openrouter.toml",
+  "config/decision/elephant.toml",
+  "config/routing/four-category.toml",
+]
+schema_version = 1

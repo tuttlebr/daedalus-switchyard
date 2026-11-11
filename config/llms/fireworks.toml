@@ -1,0 +1,31 @@
+# Provider clients and generation targets.
+[llm_clients.fireworks]
+format = "openai_chat"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = "FIREWORKS_API_KEY"
+extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-affinity = "${GLOBAL_SESSION_ID}" }
+
+[targets.max]
+id = "max"
+model = "accounts/fireworks/routers/glm-5p3-fast"
+llm_client = "fireworks"
+extra_body = { reasoning_effort = "max"}
+
+[targets.high]
+id = "high"
+model = "accounts/fireworks/routers/glm-5p3-fast"
+llm_client = "fireworks"
+extra_body = { reasoning_effort = "xhigh"}
+
+[targets.low]
+id = "low"
+model = "accounts/fireworks/routers/glm-5p3-fast"
+llm_client = "fireworks"
+extra_body = { reasoning_effort = "medium" }
+
+[targets.instant]
+id = "instant"
+model = "accounts/fireworks/routers/glm-5p3-fast"
+llm_client = "fireworks"
+extra_body = { reasoning_effort = "low" }
+# ------------------------------------------------------------------------------

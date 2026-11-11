@@ -48,9 +48,77 @@ accepts an operator's saved `ROUTES_FILE` in local `.env`; caller environment or
 Make command-line selection takes precedence, including explicit empty values.
 No provider is chosen by filename order or an implicit default. Adding a provider file adds it
 to the configuration contract tests and creates its `deploy-route_<provider>`
-Make target. Each file owns its clients, credentials, target models, reasoning
-payloads, public aliases and fallback. Check those fields when onboarding a
-provider; matching profile names do not establish equivalent behavior.
+Make target. Each file selects reusable components and any explicit overrides.
+Check the composed clients, credentials, target models, reasoning payloads,
+public aliases and fallback when onboarding a provider; matching profile names
+do not establish equivalent behavior.
+
+### Composing configurations
+
+The root files are small deployment profiles. Shared decision-service settings,
+routing policy, and provider definitions live separately:
+
+| File | What to edit there |
+| --- | --- |
+| `config/decision/elephant.toml` | Decision endpoint, model discovery, timeout, and input budget |
+| `config/routing/four-category.toml` | Stage routing, classifier instructions and categories, default probability gates, and common public aliases |
+| `config/llms/<provider>.toml` | Provider clients, credential references, models, generation settings, and headers |
+| `routes_<profile>.toml` | Component selection and intentional differences for that combination |
+
+For example, `routes_baseten.toml` selects:
+
+```toml
+include = [
+  "config/llms/baseten.toml",
+  "config/decision/elephant.toml",
+  "config/routing/four-category.toml",
+]
+schema_version = 1
+```
+
+To try another combination, create another root `routes_*.toml` selecting the
+desired files. Fragments can also include other fragments. Every include path
+is relative to the file declaring it, independently of the shell's working
+directory. Includes are local paths, without globbing or environment expansion.
+
+Files merge in listed order, and the declaring file applies last. Tables merge
+recursively; later scalar values and arrays replace earlier values. A table
+cannot replace a scalar or vice versa. Arrays are replaced as a whole, including
+arrays of tables. Omitted keys remain inherited; there is no deletion operator.
+Use a different base fragment when a combination must omit an inherited route.
+Missing files, cycles, malformed includes, and table/value conflicts fail before
+Helm or cluster changes. Keep overrides small and explicit to avoid new drift.
+
+The shipped profiles inherit the shared probability gates, `high` fallback,
+and four public aliases. A profile can override individual settings with a
+local table such as `[routes.stage.classifier.choices.low]`. Remove a local
+override to inherit the shared value again.
+
+Inspect the composed configuration without resolving header variables:
+
+```bash
+python3 scripts/render_routes.py routes_baseten.toml /tmp/switchyard-composed.toml --compose-only
+```
+
+Render deployment-ready TOML with the existing `.env`/caller precedence:
+
+```bash
+bash scripts/render_routes.sh routes_baseten.toml /tmp/switchyard-routes.toml
+make validate ROUTES_FILE=routes_baseten.toml
+make deploy-existing ROUTES_FILE=routes_baseten.toml
+```
+
+The renderer expands includes before header substitution and removes the
+`include` directive. Deployment validates, probes, and installs one flattened
+snapshot, so source edits during the capability gate cannot change what is
+deployed. Each source file is read once per composition; finish edits across
+fragments before starting a deployment. The rendered ConfigMap is self-contained,
+and existing release backups and rollback remain independent of source files.
+
+Standalone TOML files remain supported. Switchyard itself does not understand
+the local `include` directive: direct server or Helm use requires the rendered
+file. Route smoke tests, judge probes, and API-key discovery also understand
+composed profiles. No additional Python package or server image change is needed.
 
 The chart's embedded `config.routesToml` is an older GLM classifier example.
 Direct Helm use must supply `--set-file config.routesToml=<rendered provider file>`
@@ -69,7 +137,7 @@ Automatic `daedalus` routing classifies the next response into four categories:
 
 Categories are distinct from explicit aliases and provider-native effort values.
 The shipped agent exposes `max`, `high`, `low` and `instant`. A provider may retain
-additional explicit aliases, such as OpenAI's `medium` and `xhigh`, without adding
+additional explicit aliases, such as `medium` and `xhigh`, without adding
 classifier categories. Existing passthrough aliases bypass classification.
 Public `none` is retired; a provider-native value with that spelling would be a
 separate wire setting, not an alias.
@@ -205,14 +273,15 @@ not answering correctness. Neither probe deploys or verifies loaded/source parit
 
 ## Repository layout
 
-- `routes_*.toml`: discovered provider clients, targets and routes.
+- `routes_*.toml`: selectable composition profiles and explicit overrides.
+- `config/`: reusable decision-service, routing-policy and LLM fragments.
 - `charts/switchyard/`: workload, Service and network policies.
 - `Dockerfile` and `patches/`: pinned upstream build and transport/routing extensions.
 - `scripts/deploy.sh`, `scripts/deploy_state.py`: capability gate, deployment and recovery.
 - `scripts/check_capabilities.py`: generation/tool and context checks.
-- `scripts/render_routes.*`: provider-header rendering.
+- `scripts/render_routes.*`: configuration composition and provider-header rendering.
 - `tests/`: all-provider configuration and synthetic HTTP regressions.
-- `docs/investigations/`: frozen historical evidence, not current deployment inputs.
+- `docs/investigations/`: local investigation artifacts, ignored by Git and never added to commits.
 
 ## Build, publish, and deploy
 

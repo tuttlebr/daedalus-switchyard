@@ -1,8 +1,0 @@
-{
-  "/volume2/daedalus/datasets/switchyard/routes_custom.toml": "a951d18f85ad8c07d92c94ffd8f203619bb1e4c1a70349ae9c21a17114beb905",
-  "/volume2/daedalus/datasets/switchyard/patches/fireworks-chat-reasoning.patch": "f748067d2b7bf4558f57e785202fb72bd832e35c872af8377664de874a8bb1b0",
-  "/volume2/daedalus/datasets/switchyard/patches/decision-api-classifier.patch": "e9e6310c3b3fc1fb9ae5e6c98c5b294a06eba62a817674cb3157a57ef01830bc",
-  "/volume2/daedalus/datasets/switchyard/tests/test_fireworks_chat_transport.py": "b702efd47301ec4fc2fdee9ded2607e11d5a9136129a065045114176602be2da",
-  "/volume2/daedalus/datasets/daedalus-agent/builder/runtime/src/agent.rs": "637620a1b78910015c5f2fcf607a02dc1405a9b616a44a2d43d7dabe2034ce3b",
-  "/volume2/daedalus/datasets/daedalus-agent/builder/runtime/src/provider.rs": "ba53eb0139888ef2c134d1471188107dd6c985c9cec68c660e6355748a42041a"
-}

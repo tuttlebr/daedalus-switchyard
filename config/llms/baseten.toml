@@ -1,0 +1,31 @@
+# Provider clients and generation targets.
+[llm_clients.baseten]
+format = "openai_chat"
+base_url = "https://inference.baseten.co/v1"
+api_key_env = "BASETEN_API_KEY"
+extra_headers = { x-session-affinity = "${GLOBAL_SESSION_ID}" }
+
+[targets.max]
+id = "max"
+model = "zai-org/GLM-5.3-Fast"
+llm_client = "baseten"
+extra_body = { reasoning_effort = "max" }
+
+[targets.high]
+id = "high"
+model = "zai-org/GLM-5.3-Fast"
+llm_client = "baseten"
+extra_body = { reasoning_effort = "xhigh" }
+
+[targets.low]
+id = "low"
+model = "zai-org/GLM-5.3-Fast"
+llm_client = "baseten"
+extra_body = { reasoning_effort = "medium" }
+
+[targets.instant]
+id = "instant"
+model = "zai-org/GLM-5.3-Fast"
+llm_client = "baseten"
+extra_body = { reasoning_effort = "low" }
+# ------------------------------------------------------------------------------

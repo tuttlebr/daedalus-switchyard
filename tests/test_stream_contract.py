@@ -23,6 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
+from scripts.render_routes import compose_source
+
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
 USAGE = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
@@ -80,7 +82,7 @@ class StreamContractTest(unittest.TestCase):
     @contextmanager
     def gateway(self, path):
         state = {"captured": [], "abort": False}
-        config = tomllib.loads(path.read_text())
+        config = tomllib.loads(compose_source(path))
         choices = list(config["routes"]["stage"]["classifier"]["choices"])
 
         class Upstream(BaseHTTPRequestHandler):
@@ -134,7 +136,7 @@ class StreamContractTest(unittest.TestCase):
         process = None
         try:
             base = f"http://127.0.0.1:{upstream.server_port}/v1"
-            source = path.read_text()
+            source = compose_source(path)
             environment = {"PATH": os.environ.get("PATH", "")}
             for client in config["llm_clients"].values():
                 source = source.replace(client["base_url"], base)

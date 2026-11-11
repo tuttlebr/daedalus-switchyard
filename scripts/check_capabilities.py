@@ -27,6 +27,11 @@ from urllib.request import Request, urlopen
 
 import tomllib
 
+try:
+    from scripts.render_routes import compose_source
+except ModuleNotFoundError:
+    from render_routes import compose_source
+
 PARAMETERS = {
     "type": "object",
     "properties": {"key": {"type": "string", "enum": ["probe"]}},
@@ -593,7 +598,7 @@ def main():
         0 < args.timeout <= 180 and 128 <= args.max_output_tokens <= 16384,
         "invalid_budget",
     )
-    raw = args.routes.read_bytes()
+    raw = compose_source(args.routes).encode()
     config = tomllib.loads(raw.decode())
     required_windows = context_requirements(config)
     report = {

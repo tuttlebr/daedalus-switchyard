@@ -10,16 +10,18 @@ import re
 import sys
 from pathlib import Path
 
-import tomllib
+try:
+    from scripts.render_routes import load_config
+except ModuleNotFoundError:
+    from render_routes import load_config
 
 ENVIRONMENT_VARIABLE_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def api_key_environment_names(path: Path) -> list[str]:
     try:
-        with path.open("rb") as routes_file:
-            config = tomllib.load(routes_file)
-    except (OSError, tomllib.TOMLDecodeError) as error:
+        config = load_config(path)
+    except (OSError, ValueError) as error:
         raise ValueError(f"could not read {path}: {error}") from error
 
     clients = config.get("llm_clients", {})

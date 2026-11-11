@@ -229,7 +229,7 @@ class DeployShell(unittest.TestCase):
                    header_dotenv=None, header_override=None, header_placeholder=False,
                    make_target=None, saved_routes=False, route_override=None,
                    dotenv_settings="", caller_settings=None, make_settings=(),
-                   required_key=False):
+                   required_key=False, composed=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -244,6 +244,7 @@ class DeployShell(unittest.TestCase):
                 "    log.write(json.dumps(['capability-config', config]) + '\\n')\n"
                 "if os.environ['FAILURE'] == 'capability': sys.exit(1)\n"
                 "(pathlib.Path(__file__).parents[1] / 'routes.toml').write_text('# edited during probe\\n')\n"
+                "(pathlib.Path(__file__).parents[1] / 'provider.toml').write_text('# fragment edited during probe\\n')\n"
             )
             (root / "scripts/deploy_state.py").write_text(
                 "import json, pathlib, sys\n"
@@ -260,6 +261,9 @@ class DeployShell(unittest.TestCase):
             if required_key:
                 with routes.open("a") as route_file:
                     route_file.write('api_key_env = "FIXTURE_API_KEY"\n')
+            if composed:
+                (root / "provider.toml").write_text(routes.read_text())
+                routes.write_text('include = ["provider.toml"]\n')
             shutil.copy(routes, root / "routes_fixture.toml")
             (root / "routes_override.toml").write_text(routes.read_text().replace('http://fixture', 'http://override'))
             dotenv = dotenv_settings
@@ -334,6 +338,18 @@ if "--raw" in args:
                 self.assertEqual(len(configurations), 4)  # lint, template, capability gate, upgrade
                 for config in configurations:
                     self.assertEqual(config['llm_clients']['fixture']['extra_headers']['x-session-affinity'], expected)
+
+    def test_composed_snapshot_reaches_gate_and_upgrade_despite_fragment_edit(self):
+        result, calls = self.run_deploy(composed=True, header_placeholder=True,
+                                       header_dotenv="from-dotenv", required_key=True,
+                                       caller_settings={"FIXTURE_API_KEY": "synthetic-key"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        configurations = [row[-1] for row in map(json.loads, calls.splitlines())
+                          if row[0] in ("helm-config", "capability-config")]
+        self.assertEqual(len(configurations), 4)
+        self.assertTrue(all(config == configurations[0] for config in configurations))
+        self.assertEqual(configurations[0]['llm_clients']['fixture']['api_key_env'], 'FIXTURE_API_KEY')
+        self.assertNotIn('include', configurations[0])
 
     def test_missing_or_empty_header_variable_stops_before_external_commands(self):
         for dotenv, override in ((None, None), ("from-dotenv", "")):

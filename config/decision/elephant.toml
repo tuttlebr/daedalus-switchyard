@@ -1,0 +1,11 @@
+# Shared decision service connection and request policy.
+[routes.stage.classifier]
+type = "decision_api"
+base_url = "http://decision-api.daedalus.svc.cluster.local:30000/v1"
+model = "auto"
+classify_trigger = "every_request"
+timeout_ms = 2000
+recent_turn_window = 6
+max_input_tokens = "auto"
+truncate_input = true
+max_request_bytes = 65536

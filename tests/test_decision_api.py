@@ -12,13 +12,14 @@ import subprocess
 import tempfile
 import threading
 import time
-import tomllib
 import unittest
 from unittest.mock import patch
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+
+from scripts.render_routes import load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
@@ -36,7 +37,7 @@ class ProbeSchemaTest(unittest.TestCase):
         for path in sorted(ROOT.glob("routes_*.toml")):
             with self.subTest(profile=path.name), patch("sys.argv", ["probe", str(path)]), patch.object(probe, "probe", return_value=[]) as run:
                 self.assertEqual(probe.main(), 0)
-                self.assertEqual(run.call_args.args[2], tomllib.loads(path.read_text())["routes"]["stage"]["default_target"])
+                self.assertEqual(run.call_args.args[2], load_config(path)["routes"]["stage"]["default_target"])
                 self.assertEqual(run.call_args.args[0]["classify_trigger"], "every_request")
 
     def test_optional_metadata_and_clef_response(self):

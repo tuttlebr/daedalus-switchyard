@@ -16,7 +16,10 @@ import time
 from pathlib import Path
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-import tomllib
+try:
+    from scripts.render_routes import load_config
+except ModuleNotFoundError:
+    from render_routes import load_config
 
 # Name workloads rather than expected tiers: report both the winning choice and
 # the target after probability gates, without treating label scores as accuracy.
@@ -239,7 +242,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
-        route = tomllib.loads(args.routes.read_text())["routes"][args.route]
+        route = load_config(args.routes)["routes"][args.route]
         config = route["classifier"]
         if config.get("type") != "decision_api":
             raise ValueError(

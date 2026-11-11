@@ -1,0 +1,30 @@
+# Provider clients and generation targets.
+[llm_clients.openai]
+format = "openai_responses"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[targets.max]
+id = "max"
+model = "gpt-6-astra"
+llm_client = "openai"
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="ultrafast" }
+
+[targets.high]
+id = "high"
+model = "gpt-6.1-sol"
+llm_client = "openai"
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="ultrafast" }
+
+[targets.low]
+id = "low"
+model = "gpt-6.1-terra"
+llm_client = "openai"
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="fast" }
+
+[targets.instant]
+id = "instant"
+model = "gpt-6-luna"
+llm_client = "openai"
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="fast" }
+# ------------------------------------------------------------------------------

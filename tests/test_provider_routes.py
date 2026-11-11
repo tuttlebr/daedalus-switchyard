@@ -2,9 +2,10 @@
 
 import importlib.util
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
+
+from scripts.render_routes import compose_source, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 CATEGORIES = {"instant", "low", "high", "max"}
@@ -14,7 +15,7 @@ def providers():
     paths = sorted(ROOT.glob("routes_*.toml"))
     if not paths:
         raise AssertionError("No provider route configurations discovered")
-    return [(path.name, tomllib.loads(path.read_text())) for path in paths]
+    return [(path.name, load_config(path)) for path in paths]
 
 
 class ProviderRoutesTest(unittest.TestCase):
@@ -76,7 +77,7 @@ class ProviderRoutesTest(unittest.TestCase):
         for name, config in providers():
             with self.subTest(provider=name), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "routes.toml"
-                source = (ROOT / name).read_text()
+                source = compose_source(ROOT / name)
                 path.write_text(source.replace(
                     '[routes.stage.classifier]\ntype = "decision_api"',
                     '[routes.stage.classifier]\ntype = "decision_api"\napi_key_env = "DECISION_API_KEY"',

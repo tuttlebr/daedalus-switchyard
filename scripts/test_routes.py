@@ -14,15 +14,18 @@ import subprocess
 import sys
 import tempfile
 import time
-import tomllib
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+try:
+    from scripts.render_routes import load_config
+except ModuleNotFoundError:
+    from render_routes import load_config
+
 
 def load_routes(path: Path) -> dict[str, str]:
-    with path.open("rb") as source:
-        config = tomllib.load(source)
+    config = load_config(path)
     routes = config.get("routes")
     if not isinstance(routes, dict) or not routes:
         raise ValueError("TOML must contain at least one [routes.<name>] table")

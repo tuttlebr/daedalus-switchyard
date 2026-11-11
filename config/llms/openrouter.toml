@@ -1,0 +1,26 @@
+# Provider clients and generation targets.
+[llm_clients.openrouter]
+format = "openai_chat"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[targets.max]
+id = "max"
+model = "openai/gpt-6-astra"
+llm_client = "openrouter"
+
+[targets.high]
+id = "high"
+model = "anthropic/claude-opus-5.5"
+llm_client = "openrouter"
+
+[targets.low]
+id = "low"
+model = "anthropic/claude-sonnet-5.5"
+llm_client = "openrouter"
+
+[targets.instant]
+id = "instant"
+model = "anthropic/claude-haiku-5.5"
+llm_client = "openrouter"
+# ------------------------------------------------------------------------------
