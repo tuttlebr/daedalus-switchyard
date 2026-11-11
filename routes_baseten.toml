@@ -8,25 +8,25 @@ extra_headers = { x-session-affinity = "${GLOBAL_SESSION_ID}" }
 
 [targets.max]
 id = "max"
-model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+model = "zai-org/GLM-5.3-Fast"
 llm_client = "baseten"
 extra_body = { reasoning_effort = "max" }
 
 [targets.high]
 id = "high"
-model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+model = "zai-org/GLM-5.3-Fast"
 llm_client = "baseten"
 extra_body = { reasoning_effort = "high" }
 
 [targets.low]
 id = "low"
-model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+model = "zai-org/GLM-5.3-Fast"
 llm_client = "baseten"
 extra_body = { reasoning_effort = "medium" }
 
 [targets.instant]
 id = "instant"
-model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+model = "zai-org/GLM-5.3-Fast"
 llm_client = "baseten"
 extra_body = { reasoning_effort = "low" }
 # ------------------------------------------------------------------------------
