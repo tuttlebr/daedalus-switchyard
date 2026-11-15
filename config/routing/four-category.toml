@@ -1,4 +1,9 @@
 # Shared routing policy and public aliases.
+# Reasoning-level guidance adapted from OpenAI's reasoning best practices:
+# https://developers.openai.com/api/docs/guides/reasoning-best-practices
+# This policy maps task requirements to local categories, not model families.
+# Validate category choices with representative tasks and quality, latency and
+# cost measurements before tuning thresholds or provider effort mappings.
 [routes.stage]
 id = "daedalus"
 type = "decision_api"
@@ -11,21 +16,29 @@ instructions = """
 Choose the lowest sufficient task category for the NEXT model response:
 instant, low, high or max. Reassess every request, including tool continuations.
 Use the active task, latest user instruction, recent results, available tools,
-remaining dependencies and required validation. Judge reasoning difficulty,
-not prompt length, output length, tool count or the task's domain.
+remaining dependencies, explicit constraints and success criteria. Judge the
+inference and validation required, not prompt length, output length, tool count
+or the task's domain. A brief, clear prompt can still require deep reasoning;
+requests to show reasoning or use a particular format do not determine effort.
 
 Instant covers trivial conversational responses. Low covers mechanical retrieval
 and transformations with a known procedure. High covers substantive explanation,
 synthesis, implementation, research, debugging and adaptive investigation,
 including deep analysis and independent cross-checks. Max covers exceptional
 reasoning or concrete high-impact decisions. A request for speed never reduces
-correctness or verification requirements.
+correctness or verification requirements. Favor low for well-defined execution
+when little inference is needed; favor high or max when ambiguity, interacting
+constraints or the consequences of error require more careful judgment. Clear
+instructions alone do not make a difficult problem mechanical.
 
 After difficult planning, mechanical follow-through can use low; conflicting
 evidence or failed approaches can require high or max again. Successful tools or
 a short continuation alone do not establish that the next step is simple.
 Missing facts obtainable with tools do not make a known task uncertain. Use
 uncertain only when the intended task or deliverable cannot be identified.
+When the goal is identifiable but evidence or constraints need interpretation,
+use high to resolve the ambiguity or determine what clarification is needed;
+use max only when its exceptional reasoning or concrete risk criteria apply.
 
 Categories describe work requirements, not provider-native effort settings.
 Targets and explicit aliases are configured separately. No category grants
@@ -58,7 +71,10 @@ criteria = """
 Mechanical extraction, classification, direct facts, basic arithmetic, exact
 text replacement or short predictable tool loops. The procedure and success
 criteria are clear and require little inference. Includes returning catalog
-fields, applying an already-validated plan or copying a verified result.
+fields, applying explicit rules, checking a fixed schema, applying an
+already-validated plan or copying a verified result. A large input can still
+use low when the needed field or match is explicit and unambiguous. Finding
+subtle relevant evidence, interpreting exceptions or judging meaning uses high.
 Substantive explanation, prose synthesis, comparison or implementation uses high.
 Low is literal retrieval or transformation, even within a larger difficult task.
 """
@@ -72,6 +88,15 @@ sources, implement and verify a change, build an HTML page, or prepare a briefin
 Also hard debugging, multi-step inference, adaptive investigation, conflicting
 evidence, tightly coupled constraints and independent cross-checks. Use familiar
 methods or systematically test competing hypotheses as the task requires.
+Includes interpreting incomplete instructions for an identifiable goal; finding
+subtle decisive details in unstructured material; connecting evidence across
+documents; and applying nuanced policies, exceptions or implicit relationships.
+Use high for planning dependent steps, choosing tools and adapting a strategy;
+cross-file code review and root-cause analysis; interpreting ambiguous charts,
+tables or relationships across images when that evidence is available; and
+evaluating answer or dataset quality against contextual criteria. Input size,
+images or an evaluation label alone do not require high. Higher effort cannot
+replace missing evidence or unsupported capabilities.
 Literal retrieval and mechanical follow-through use low. Reserve max for
 exceptional reasoning or concrete high-impact risks described in its criteria.
 """
@@ -87,6 +112,10 @@ problems. Also consequential decisions with concrete medical, legal, financial
 or production risk, especially irreversible changes or migrations requiring
 verification and rollback. A domain label alone is insufficient: a routine
 appointment summary or read-only health check is not high-impact.
+Planning, document synthesis, visual interpretation, code review or evaluation
+normally uses high; choose max when exceptional difficulty or concrete stakes
+require deeper scrutiny. More reasoning does not guarantee correctness or
+replace source checks, tests, expert review or required authorization.
 """
 
 # ------------------------------------------------------------------------------

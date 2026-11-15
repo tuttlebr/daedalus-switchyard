@@ -1,31 +1,31 @@
 # Provider clients and generation targets.
 [llm_clients.fireworks]
-format = "openai_chat"
+format = "openai_responses"
 base_url = "https://api.fireworks.ai/inference/v1"
 api_key_env = "FIREWORKS_API_KEY"
 extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-affinity = "${GLOBAL_SESSION_ID}" }
 
 [targets.max]
 id = "max"
-model = "accounts/fireworks/routers/glm-5p3-fast"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "max"}
+extra_body = { reasoning_effort = "max", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
 
 [targets.high]
 id = "high"
-model = "accounts/fireworks/routers/glm-5p3-fast"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "xhigh"}
+extra_body = { reasoning_effort = "xhigh", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
 
 [targets.low]
 id = "low"
-model = "accounts/fireworks/routers/glm-5p3-fast"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "medium" }
+extra_body = { reasoning_effort = "medium", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
 
 [targets.instant]
 id = "instant"
-model = "accounts/fireworks/routers/glm-5p3-fast"
+model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "low" }
+extra_body = { reasoning_effort = "low", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
 # ------------------------------------------------------------------------------

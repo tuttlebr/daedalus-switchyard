@@ -27,7 +27,7 @@ spec.loader.exec_module(probe)
 
 
 @contextmanager
-def model_catalog(payload, status=200):
+def model_catalog(payload, status=200, *, reject_library_agent=False):
     requests = []
 
     class Peer(BaseHTTPRequestHandler):
@@ -36,7 +36,8 @@ def model_catalog(payload, status=200):
 
         def do_GET(self):
             requests.append((self.path, self.headers.get("Authorization")))
-            self.send_response(status)
+            blocked = reject_library_agent and self.headers.get("User-Agent", "").startswith("Python-urllib/")
+            self.send_response(403 if blocked else status)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode())
@@ -76,6 +77,14 @@ class CapabilityCoverage(unittest.TestCase):
 
 
 class ContextWindows(unittest.TestCase):
+    def test_catalog_accepts_application_identity_when_library_identity_is_blocked(self):
+        with model_catalog(
+            {"data": [{"id": "fixture", "context_length": 32768}]},
+            reject_library_agent=True,
+        ) as peer:
+            result = probe.discover_context_window(peer.client, "fixture", timeout=2)
+        self.assertEqual(result.tokens, 32768)
+
     def test_provider_fields_and_serving_cap(self):
         for field in ("context_window", "context_length", "max_model_len", "max_context_length"):
             with self.subTest(field=field), model_catalog(
@@ -347,7 +356,7 @@ class Capabilities(unittest.TestCase):
     def exercise(
         self, api, fault=None, *, nullable_tool_calls=False,
         repeat_terminal=False, tool_finish_reason="tool_calls", terminal_variant=None,
-        terminal_tool_parts=None, fault_at_request=None,
+        terminal_tool_parts=None, fault_at_request=None, reject_library_agent=False,
     ):
         seen = []
 
@@ -358,6 +367,10 @@ class Capabilities(unittest.TestCase):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 seen.append(body)
+                if reject_library_agent and self.headers.get("User-Agent", "").startswith("Python-urllib/"):
+                    self.send_response(403)
+                    self.end_headers()
+                    return
                 active_fault = fault if fault_at_request in (None, len(seen)) else None
                 if active_fault == "unavailable":
                     self.send_response(404)
@@ -499,6 +512,11 @@ class Capabilities(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_streams_accept_application_identity_when_library_identity_is_blocked(self):
+        for api in ("openai_chat", "openai_responses"):
+            with self.subTest(api=api):
+                self.exercise(api, reject_library_agent=True)
 
     def test_both_transports_consume_fresh_results(self):
         for api in ("openai_chat", "openai_responses"):

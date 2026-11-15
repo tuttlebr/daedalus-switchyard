@@ -32,6 +32,9 @@ try:
 except ModuleNotFoundError:
     from render_routes import compose_source
 
+# Identify the application: some provider edges reject the default urllib identity.
+USER_AGENT = "daedalus-switchyard-capability-check/1.0"
+
 PARAMETERS = {
     "type": "object",
     "properties": {"key": {"type": "string", "enum": ["probe"]}},
@@ -220,7 +223,7 @@ def discover_context_window(client: dict, model: str, *, timeout: float) -> Cont
     """Read the serving endpoint's metadata, without generating a large prompt."""
     key = os.environ.get(client.get("api_key_env", ""), "")
     require(bool(key) or not client.get("api_key_env"), "missing_credential")
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     if key:
         headers["Authorization"] = f"Bearer {key}"
     request = Request(client["base_url"].rstrip("/") + "/models", headers=headers)
@@ -325,7 +328,11 @@ def read_exchange(
     request = Request(
         url,
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+            "User-Agent": USER_AGENT,
+        },
     )
     started = time.monotonic()
     text, calls, finish, done, model = "", {}, None, False, None

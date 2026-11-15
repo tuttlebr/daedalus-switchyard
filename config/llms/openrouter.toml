@@ -1,26 +1,30 @@
 # Provider clients and generation targets.
 [llm_clients.openrouter]
-format = "openai_chat"
+format = "openai_responses"
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 
 [targets.max]
 id = "max"
-model = "openai/gpt-6-astra"
+model = "thinkingmachines/inkling-2-small:nitro"
 llm_client = "openrouter"
+extra_body = { reasoning = { enabled = true, effort = "max" } }
 
 [targets.high]
 id = "high"
-model = "anthropic/claude-opus-5.5"
+model = "thinkingmachines/inkling-2-small:nitro"
 llm_client = "openrouter"
+extra_body = { reasoning = { enabled = true, effort = "high" } }
 
 [targets.low]
 id = "low"
-model = "anthropic/claude-sonnet-5.5"
+model = "thinkingmachines/inkling-2-small:nitro"
 llm_client = "openrouter"
+extra_body = { reasoning = { enabled = true, effort = "low" } }
 
 [targets.instant]
 id = "instant"
-model = "anthropic/claude-haiku-5.5"
+model = "thinkingmachines/inkling-2-small:nitro"
 llm_client = "openrouter"
+extra_body = { reasoning = { enabled = true, effort = "minimal" } }
 # ------------------------------------------------------------------------------

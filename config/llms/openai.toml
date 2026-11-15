@@ -6,25 +6,25 @@ api_key_env = "OPENAI_API_KEY"
 
 [targets.max]
 id = "max"
-model = "gpt-6-astra"
+model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="ultrafast" }
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "max" }, store = false }
 
 [targets.high]
 id = "high"
-model = "gpt-6.1-sol"
+model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="ultrafast" }
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "high" }, store = false }
 
 [targets.low]
 id = "low"
 model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="fast" }
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "low" }, store = false }
 
 [targets.instant]
 id = "instant"
-model = "gpt-6-luna"
+model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise" }, store = false, service_tier="fast" }
+extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "minimal" }, store = false }
 # ------------------------------------------------------------------------------
