@@ -245,7 +245,8 @@ Without the built binary, HTTP transport tests are skipped. Older algorithm
 fixtures test compatibility separately from the current deployment policy.
 `tests/test_responses_transport.py` discovers native Responses aliases and checks
 both streaming modes, target defaults, caller reasoning overrides and tool-result
-IDs against a synthetic provider. `tests/test_stream_contract.py` calls every
+IDs against a synthetic provider. It also checks native snapshot corrections;
+see [native Responses snapshots](docs/responses-native-snapshots.md). `tests/test_stream_contract.py` calls every
 route of every provider file through both Chat and Responses with streaming on,
 off and omitted, and checks that the reply uses the mode the caller requested.
 It also drops the upstream connection mid-stream and checks the terminal

@@ -23,7 +23,7 @@ BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
 @unittest.skipUnless(BINARY, "set SWITCHYARD_TEST_BINARY to the built binary")
 class ResponsesTransportTest(unittest.TestCase):
     @contextmanager
-    def gateway(self, path):
+    def gateway(self, path, stream_events=None):
         captured = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -43,7 +43,7 @@ class ResponsesTransportTest(unittest.TestCase):
                     "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
                 }
                 if body.get("stream"):
-                    events = [
+                    events = stream_events or [
                         {"type": "response.output_text.delta", "sequence_number": 0,
                          "item_id": "msg_fixture", "output_index": 0,
                          "content_index": 0, "delta": "OK"},
@@ -160,11 +160,48 @@ class ResponsesTransportTest(unittest.TestCase):
                                 self.assertEqual(body["model"], target["model"])
                                 self.assertEqual(body["stream"], stream)
                                 self.assertEqual(body["input"][-2:], history[-2:])
-                                self.assertEqual(body["reasoning"], payload.get(
-                                    "reasoning", target["extra_body"]["reasoning"]))
+                                self.assertEqual(body.get("reasoning"), payload.get(
+                                    "reasoning", target["extra_body"].get("reasoning")))
+                                for key, value in target["extra_body"].items():
+                                    self.assertEqual(body[key], payload.get(key, value))
                                 self.assertEqual(body["max_output_tokens"], 32)
                                 exercised += 1
         self.assertGreater(exercised, 0, "No native Responses aliases discovered")
+
+    def test_native_snapshots_can_replace_provisional_text(self):
+        item = {"id": "msg_fixture", "type": "message", "role": "assistant",
+                "status": "completed", "content": [
+                    {"type": "output_text", "text": "Corrected 雪🌲", "annotations": []}]}
+        events = [
+            {"type": "response.output_text.delta", "output_index": 0,
+             "content_index": 0, "delta": "Provisional too long"},
+            {"type": "response.output_item.done", "output_index": 0, "item": item},
+            {"type": "response.completed", "response": {
+                "id": "resp_fixture", "object": "response", "created_at": 1,
+                "status": "completed", "model": "fixture", "output": [item],
+                "usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}}},
+        ]
+        for sequence, event in enumerate(events):
+            event["sequence_number"] = sequence
+        with self.gateway(ROOT / "routes_openai.toml", events) as (url, _, config, opener):
+            for endpoint, key, value in [
+                ("responses", "input", "fixture"),
+                ("chat/completions", "messages", [{"role": "user", "content": "fixture"}]),
+            ]:
+                request = Request(
+                    url + "/v1/" + endpoint,
+                    data=json.dumps({"model": "daedalus/low", "stream": True, key: value}).encode(),
+                    headers={"Content-Type": "application/json"},
+                )
+                with opener.open(request, timeout=5) as response:
+                    output = [json.loads(line[6:]) for line in response.read().splitlines()
+                              if line.startswith(b"data: {")]
+                if endpoint == "responses":
+                    expected = json.loads(json.dumps(events))
+                    expected[-1]["response"]["model"] = config["targets"]["low"]["id"]
+                    self.assertEqual(output, expected)
+                else:
+                    self.assertIn("error", output[-1])
 
 
 if __name__ == "__main__":

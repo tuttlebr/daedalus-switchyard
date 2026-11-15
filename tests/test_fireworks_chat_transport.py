@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 import tomllib
 
 from scripts.render_routes import compose_source, load_config
+from test_stream_contract import responses_reply
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
@@ -173,7 +174,10 @@ class FireworksChatTransportTest(unittest.TestCase):
                     except OSError:
                         pass
                     return
-                if body.get("stream"):
+                if self.path.endswith("/responses"):
+                    content_type, raw = responses_reply(body)
+                    data = raw.encode()
+                elif body.get("stream"):
                     data = (
                         "".join(f"data: {json.dumps(event)}\n\n" for event in events)
                         + "data: [DONE]\n\n"

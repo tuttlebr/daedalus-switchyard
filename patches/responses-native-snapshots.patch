@@ -1,0 +1,227 @@
+--- a/crates/protocol/src/stream.rs
++++ b/crates/protocol/src/stream.rs
+@@ -280,7 +280,7 @@
+     chunk: LlmResponseChunk,
+ ) -> Result<(), LlmClientError> {
+     match chunk {
+-        LlmResponseChunk::DecodeError { message } => {
++        LlmResponseChunk::DecodeError { message } | LlmResponseChunk::SnapshotConflict { message } => {
+             Err(LlmClientError::ResponseTranslation(message))
+         }
+         LlmResponseChunk::StreamError { message } => Err(LlmClientError::UpstreamHttp {
+@@ -350,6 +350,13 @@
+         /// Human-readable decoding failure.
+         message: String,
+     },
++    /// A native snapshot replaced content already emitted by the append-only IR.
++    /// Exact provider replay can carry the correction; translated or aggregate
++    /// consumers must fail instead of silently returning stale content.
++    SnapshotConflict {
++        /// Human-readable projection failure.
++        message: String,
++    },
+     /// Reports an upstream failure delivered inside an otherwise successful stream.
+     StreamError {
+         /// Human-readable upstream failure.
+@@ -363,7 +370,8 @@
+ /// id, and a growing arguments string parsed as JSON at the end); `MessageStart`,
+ /// `Usage`, and `MessageStop` set the corresponding fields.
+ /// [`DecodeError`](LlmResponseChunk::DecodeError) and
+-/// [`StreamError`](LlmResponseChunk::StreamError) chunks are ignored here; use
++/// [`StreamError`](LlmResponseChunk::StreamError) and
++/// [`SnapshotConflict`](LlmResponseChunk::SnapshotConflict) chunks are ignored here; use
+ /// [`LlmResponse::into_agg`] when they must become errors.
+ ///
+ /// Folding is lossy for multiple outputs: text and reasoning indices are ignored,
+@@ -446,7 +454,9 @@
+             LlmResponseChunk::MessageStop { reason } => {
+                 self.stop_reason = Some(stop_reason_from_str(reason.as_deref()));
+             }
+-            LlmResponseChunk::DecodeError { .. } | LlmResponseChunk::StreamError { .. } => {}
++            LlmResponseChunk::DecodeError { .. }
++            | LlmResponseChunk::SnapshotConflict { .. }
++            | LlmResponseChunk::StreamError { .. } => {}
+         }
+     }
+ 
+@@ -633,6 +643,21 @@
+                 ..
+             })
+         ));
++    }
++
++    #[test]
++    fn accumulating_snapshot_conflicts_fails_instead_of_returning_provisional_text() {
++        let response = LlmResponse::Stream(Box::pin(stream::iter([Ok(
++            LlmResponseStreamEvent::preserved(
++                crate::WireFormat::OpenAiResponses,
++                json!({"type":"response.completed"}),
++                vec![LlmResponseChunk::SnapshotConflict {
++                    message: "snapshot replaces provisional text".to_string(),
++                }],
++            ),
++        )])));
++        assert!(matches!(block_on(response.into_agg()),
++            Err(LlmClientError::ResponseTranslation(_))));
+     }
+ 
+     #[test]
+--- a/crates/switchyard-translation/src/codecs/anthropic/stream.rs
++++ b/crates/switchyard-translation/src/codecs/anthropic/stream.rs
+@@ -238,7 +238,7 @@
+             state.stop_reason = reason.or_else(|| state.stop_reason.clone());
+             Vec::new()
+         }
+-        LlmResponseChunk::StreamError { message } | LlmResponseChunk::DecodeError { message } => {
++        LlmResponseChunk::StreamError { message } | LlmResponseChunk::DecodeError { message } | LlmResponseChunk::SnapshotConflict { message } => {
+             // An in-band error is terminal: emit the error, then nothing further.
+             state.finished = true; // finish() adds no success events
+             state.errored = true; // the entry guard drops any later chunk
+--- a/crates/switchyard-translation/src/codecs/openai_chat/stream.rs
++++ b/crates/switchyard-translation/src/codecs/openai_chat/stream.rs
+@@ -310,7 +310,7 @@
+                 state.saw_backend_usage.then(|| openai_usage_value(state)),
+             )]
+         }
+-        LlmResponseChunk::DecodeError { message } | LlmResponseChunk::StreamError { message } => {
++        LlmResponseChunk::DecodeError { message } | LlmResponseChunk::SnapshotConflict { message } | LlmResponseChunk::StreamError { message } => {
+             // An in-band error is terminal: emit the error, then nothing further.
+             state.finished = true; // finish() adds no success events
+             state.errored = true; // the entry guard drops any later chunk
+--- a/crates/libsy/src/algorithms/util/buffered_response.rs
++++ b/crates/libsy/src/algorithms/util/buffered_response.rs
+@@ -63,7 +63,7 @@
+                     item.map_err(|source| LibsyError::client_call(executor.to_string(), source))?;
+                 for chunk in event.normalized() {
+                     let failure = match chunk {
+-                        LlmResponseChunk::DecodeError { message } => {
++                        LlmResponseChunk::DecodeError { message } | LlmResponseChunk::SnapshotConflict { message } => {
+                             Some(LlmClientError::ResponseTranslation(message.clone()))
+                         }
+                         LlmResponseChunk::StreamError { message } => {
+--- a/crates/switchyard-translation/src/codecs/responses/stream.rs
++++ b/crates/switchyard-translation/src/codecs/responses/stream.rs
+@@ -54,6 +54,14 @@
+         // Exact replay emits `raw` once. Normalized encodings only advance codec state;
+         // their generated events are discarded and must not create sequence-number gaps.
+         for chunk in normalized {
++            // A snapshot can replace earlier text or arguments on the native wire.
++            // The append-only IR cannot represent that correction and reports a
++            // conflict for translated consumers. It is not an upstream failure:
++            // exact replay preserves the authoritative snapshot for the client.
++            // Actual `error` / `response.failed` events still end native streams.
++            if matches!(chunk, LlmResponseChunk::SnapshotConflict { .. }) {
++                continue;
++            }
+             drop(encode_responses_stream(state, chunk));
+         }
+         state.response_sequence_number = raw
+@@ -269,9 +277,6 @@
+                 for (position, item) in items.iter().enumerate() {
+                     if let Some(item) = item.as_object() {
+                         out.extend(decode_responses_completed_item(item, position, state));
+-                        if matches!(out.last(), Some(LlmResponseChunk::StreamError { .. })) {
+-                            return out;
+-                        }
+                     }
+                 }
+             }
+@@ -394,7 +399,9 @@
+             state.stop_reason = reason.or_else(|| state.stop_reason.clone());
+             Vec::new()
+         }
+-        LlmResponseChunk::DecodeError { message } | LlmResponseChunk::StreamError { message } => {
++        LlmResponseChunk::DecodeError { message }
++        | LlmResponseChunk::SnapshotConflict { message }
++        | LlmResponseChunk::StreamError { message } => {
+             // An in-band error is terminal: emit the error, then nothing further.
+             state.finished = true; // finish() adds no success events
+             state.errored = true; // the entry guard drops any later chunk
+@@ -787,7 +794,7 @@
+     snapshot: &str,
+ ) -> Result<Option<String>, LlmResponseChunk> {
+     let Some(suffix) = snapshot.strip_prefix(decoded.as_str()) else {
+-        return Err(LlmResponseChunk::StreamError {
++        return Err(LlmResponseChunk::SnapshotConflict {
+             message: "Responses snapshot conflicts with streamed content".to_string(),
+         });
+     };
+--- a/crates/switchyard-translation/tests/stream_translation.rs
++++ b/crates/switchyard-translation/tests/stream_translation.rs
+@@ -3150,16 +3150,64 @@
+             source,
+             json!({"type": "response.completed", "response": response}),
+         )?;
+-        assert!(matches!(
+-            decoded.normalized().last(),
+-            Some(LlmResponseChunk::StreamError { .. })
++        assert!(decoded.normalized().iter().any(|chunk|
++            matches!(chunk, LlmResponseChunk::SnapshotConflict { .. })
+         ));
+-        assert!(
+-            !decoded
+-                .normalized()
+-                .iter()
+-                .any(|chunk| matches!(chunk, LlmResponseChunk::MessageStop { .. }))
+-        );
+-    }
+-    Ok(())
+-}
++        assert!(decoded.normalized().iter().any(|chunk|
++            matches!(chunk, LlmResponseChunk::MessageStop { .. })
++        ));
++    }
++    Ok(())
++}
++
++// Native Responses consumers can reconcile authoritative snapshots. Translated
++// append-only consumers must continue to fail rather than silently corrupt text.
++#[test]
++fn responses_native_snapshot_corrections_replay_through_completion() -> TestResult {
++    let engine = TranslationEngine::default();
++    let source = WireFormat::OpenAiResponses;
++    for include_item in [false, true] {
++        for tool in [false, true] {
++            let item = if tool {
++                json!({"type":"function_call", "id":"fc_1", "call_id":"call_1",
++                    "name":"clock", "arguments":"{}"})
++            } else {
++                json!({"type":"message", "id":"msg_1", "role":"assistant",
++                    "content":[{"type":"output_text", "text":"Corrected 雪🌲"}]})
++            };
++            let mut events = vec![json!({"type":"response.created",
++                "response":{"id":"resp_1", "model":"fixture"}})];
++            if tool {
++                events.push(json!({"type":"response.output_item.added", "output_index":0,
++                    "item":{"type":"function_call", "id":"fc_1", "call_id":"call_1",
++                    "name":"clock", "arguments":""}}));
++            }
++            events.push(json!({"type":if tool {"response.function_call_arguments.delta"}
++                else {"response.output_text.delta"}, "output_index":0, "content_index":0,
++                "delta":if tool {"{\"discard\":true}"} else {"Provisional too long"}}));
++            if include_item {
++                events.push(json!({"type":"response.output_item.done", "output_index":0,
++                    "item":item}));
++            }
++            events.push(json!({"type":"response.completed", "response":{
++                "id":"resp_1", "model":"fixture", "status":"completed", "output":[item],
++                "usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}}));
++            for target in [source, WireFormat::OpenAiChat, WireFormat::AnthropicMessages] {
++                let mut decoder = StreamTranslationState::new(source, target);
++                let mut encoder = StreamTranslationState::new(source, target);
++                let mut output = Vec::new();
++                for event in &events {
++                    let decoded = engine.decode_stream_event(&mut decoder, source, event.clone())?;
++                    output.extend(engine.encode_stream_event(&mut encoder, target, decoded)?);
++                }
++                output.extend(engine.finish_stream(&mut encoder, target)?);
++                if target == source {
++                    assert_eq!(output, events);
++                } else {
++                    assert!(output.last().unwrap()["error"]["message"].is_string(), "{output:?}");
++                }
++            }
++        }
++    }
++    Ok(())
++}
