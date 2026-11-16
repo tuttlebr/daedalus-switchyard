@@ -6,25 +6,25 @@ api_key_env = "OPENROUTER_API_KEY"
 
 [targets.max]
 id = "max"
-model = "thinkingmachines/inkling-2-small:nitro"
+model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
 extra_body = { reasoning = { enabled = true, effort = "max" } }
 
 [targets.high]
 id = "high"
-model = "thinkingmachines/inkling-2-small:nitro"
+model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
 extra_body = { reasoning = { enabled = true, effort = "high" } }
 
 [targets.low]
 id = "low"
-model = "thinkingmachines/inkling-2-small:nitro"
+model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
 extra_body = { reasoning = { enabled = true, effort = "low" } }
 
 [targets.instant]
 id = "instant"
-model = "thinkingmachines/inkling-2-small:nitro"
+model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
 extra_body = { reasoning = { enabled = true, effort = "minimal" } }
 # ------------------------------------------------------------------------------

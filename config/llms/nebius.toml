@@ -1,0 +1,30 @@
+# Provider clients and generation targets.
+[llm_clients.nebius]
+format = "openai_responses"
+base_url = "https://api.tokenfactory.us-north1.nebius.com/v1"
+api_key_env = "NEBIUS_API_KEY"
+
+[targets.max]
+id = "max"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+llm_client = "nebius"
+extra_body = { reasoning_effort = "max" }
+
+[targets.high]
+id = "high"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+llm_client = "nebius"
+extra_body = { reasoning_effort = "xhigh" }
+
+[targets.low]
+id = "low"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+llm_client = "nebius"
+extra_body = { reasoning_effort = "medium" }
+
+[targets.instant]
+id = "instant"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+llm_client = "nebius"
+extra_body = { reasoning_effort = "low" }
+# ------------------------------------------------------------------------------
