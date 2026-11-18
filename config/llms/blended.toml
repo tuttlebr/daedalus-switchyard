@@ -1,0 +1,55 @@
+[llm_clients.openai]
+format = "openai_responses"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[llm_clients.baseten]
+format = "openai_responses"
+base_url = "https://inference.baseten.co/v1"
+api_key_env = "BASETEN_API_KEY"
+# extra_headers = { x-session-affinity = "${GLOBAL_SESSION_ID}" }
+
+[llm_clients.fireworks]
+format = "openai_responses"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = "FIREWORKS_API_KEY"
+# extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-affinity = "${GLOBAL_SESSION_ID}" }
+
+[llm_clients.nebius]
+format = "openai_responses"
+base_url = "https://api.tokenfactory.us-north1.nebius.com/v1"
+api_key_env = "NEBIUS_API_KEY"
+
+[llm_clients.together]
+format = "openai_responses"
+base_url = "https://api.together.ai/v1"
+api_key_env = "TOGETHER_API_KEY"
+
+[llm_clients.openrouter]
+format = "openai_responses"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[targets.max]
+id = "max"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+llm_client = "baseten"
+extra_body = { stream = true, reasoning = { effort = "high" } }
+
+[targets.high]
+id = "high"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+llm_client = "baseten"
+extra_body = { stream = true, reasoning = { effort = "medium" } }
+
+[targets.low]
+id = "low"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+llm_client = "baseten"
+extra_body = { stream = true, reasoning = { effort = "low" } }
+
+[targets.instant]
+id = "instant"
+model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+llm_client = "fireworks"
+extra_body = { stream = true }

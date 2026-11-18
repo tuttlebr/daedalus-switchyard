@@ -7,7 +7,7 @@ api_key_env = "OPENROUTER_API_KEY"
 
 [targets.max]
 id = "max"
-model = "deepseek/deepseek-v4.1-flash-1017:nitro"
+model = "meta/muse-spark-open:nitro"
 llm_client = "openrouter"
 extra_body = { stream = true, reasoning = { enabled = true, effort = "max" } }
 
@@ -25,7 +25,7 @@ extra_body = { stream = true, reasoning = { enabled = true, effort = "low" } }
 
 [targets.instant]
 id = "instant"
-model = "deepseek/deepseek-v4.1-flash-1017:nitro"
+model = "meta/muse-ember:nitro"
 llm_client = "openrouter"
 extra_body = { stream = true, reasoning = { enabled = true, effort = "minimal" } }
 # ------------------------------------------------------------------------------

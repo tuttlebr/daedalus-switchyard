@@ -1,0 +1,7 @@
+# Select the blended targets with the existing classifier and four-category policy.
+include = [
+  "config/llms/blended.toml",
+  "config/decision/elephant.toml",
+  "config/routing/four-category.toml",
+]
+schema_version = 1

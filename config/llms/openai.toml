@@ -7,15 +7,15 @@ api_key_env = "OPENAI_API_KEY"
 
 [targets.max]
 id = "max"
-model = "gpt-6.1-terra"
+model = "gpt-6.2-astra"
 llm_client = "openai"
-extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "max" }, store = false }
+extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "low" }, store = false }
 
 [targets.high]
 id = "high"
-model = "gpt-6.1-terra"
+model = "gpt-6.2-sol"
 llm_client = "openai"
-extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "high" }, store = false }
+extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "low" }, store = false }
 
 [targets.low]
 id = "low"
@@ -26,7 +26,7 @@ extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summar
 # Terra does not support minimal; instant keeps reasoning on at low.
 [targets.instant]
 id = "instant"
-model = "gpt-6.1-terra"
+model = "gpt-6-luna"
 llm_client = "openai"
 extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "low" }, store = false }
 # ------------------------------------------------------------------------------

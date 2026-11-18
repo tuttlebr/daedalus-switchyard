@@ -8,25 +8,25 @@ extra_headers = { x-session-affinity = "${GLOBAL_SESSION_ID}" }
 
 [targets.max]
 id = "max"
-model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+model = "zai-org/GLM-5.3-Fast"
 llm_client = "baseten"
 extra_body = { stream = true, reasoning = { effort = "high" } }
 
 [targets.high]
 id = "high"
-model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+model = "zai-org/GLM-5.3-Fast"
 llm_client = "baseten"
-extra_body = { stream = true, reasoning = { effort = "medium" } }
+extra_body = { stream = true, reasoning = { effort = "low" } }
 
 [targets.low]
 id = "low"
 model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
 llm_client = "baseten"
-extra_body = { stream = true, reasoning = { effort = "low" } }
+extra_body = { stream = true, reasoning = { effort = "high" } }
 
 [targets.instant]
 id = "instant"
-model = "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
 llm_client = "baseten"
 extra_body = { stream = true, reasoning = { effort = "low" } }
 # ------------------------------------------------------------------------------

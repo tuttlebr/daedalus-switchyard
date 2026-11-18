@@ -106,25 +106,9 @@ proves the server accepts the config.
 
 ## Live checks, only within authorization
 
-First establish the selected route, endpoint, credentials by environment name,
-capability groups, and bounded request/token/time budget. Inspect script behavior
-before execution. Do not source or display unrelated credential files. Render
-header references once into a private temporary file before probing a selected
-configuration that uses them; the capability helper composes but does not perform
-header interpolation.
-
-- `scripts/check_capabilities.py SELECTED_RENDERED_FILE --timeout 60 --max-output-tokens 4096 --report PRIVATE_REPORT`
-  sends real provider requests for distinct client/model/default groups. It covers
-  synthetic text and automatic/forced tool continuation; inspect its current
-  streaming modes and grouping before claiming coverage. A timeout is per request,
-  not a total run budget. Bound the whole run and do not loop on failures.
-- `make test routes_PROVIDER.toml TEST_BASE_URL=SELECTED_GATEWAY_URL` exercises a
-  gateway and can incur model calls. Confirm that its running config/image match
-  the candidate; testing an old deployment does not validate local TOML edits.
-- Keep direct-provider results separate from gateway results and record tested
-  model/format/default combinations. A successful request does not prove a requested
-  reasoning control was honored; verify observable behavior where possible and
-  label that limitation when it cannot be measured.
+Read [live validation](live-validation.md) when preparing or executing authorized
+endpoint tests. It covers test selection, executable helpers and their limits,
+reasoning/`extra_body` comparisons, and the evidence needed to report results.
 
 Log reads use `kubectl --context SELECTED_CONTEXT -n daedalus`, bounded with
 `--since`, `--tail`, and a request timeout. Discover the gateway pod first; do not

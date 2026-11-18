@@ -1,6 +1,6 @@
 ---
 name: switchyard-provider-config
-description: Review Switchyard config/llms TOMLs against config/api-spec, current provider specifications, and the pinned gateway implementation; add or modify provider configurations through Q&A. Use for provider configuration audits and guided configuration edits, not deployment or general gateway optimization.
+description: Review and edit Switchyard provider TOMLs against provider specifications and the pinned gateway; run user-authorized live endpoint tests for reasoning controls and extra_body compatibility. Use for provider configuration audits, guided edits, and live validation, not deployment or general gateway optimization.
 ---
 
 # Switchyard provider configuration
@@ -16,6 +16,11 @@ status before editing; preserve existing work, including untracked specs.
 - **Add or modify:** ask only for missing choices that affect the result, then
   implement the requested TOML changes and validate them. Existing authorization
   to edit is sufficient; do not add a confirmation gate for ordinary edits.
+- **Live validation:** when the user authorizes model traffic, execute bounded
+  tests against the explicitly selected provider/gateway endpoints. Follow
+  [live validation](references/live-validation.md) to test reasoning settings,
+  `extra_body` fields, and caller overrides. This can accompany review or editing;
+  permission to probe does not itself authorize configuration edits or deployment.
 - If the request combines review and remediation, do both within that scope.
 
 Discover `routes_*.toml`, their include dependencies, and `config/api-spec/*` on
@@ -92,6 +97,11 @@ Local review/editing does not authorize deployment, credential changes, or model
 traffic. Require an explicitly selected route source for live probes or deployment,
 using prior authorization when present. Never probe every provider merely because
 the review covers every file. Preserve working LAN endpoints and consumers.
+If live validation is requested and authorized, carry it through execution and
+report actual results; do not stop at suggested commands or offline checks. If
+authorization is missing, prepare the exact test matrix and bounded command first,
+then ask only for the missing authorization or route selection. Editing this skill
+alone does not authorize running its live probes.
 
 When a change reaches a shared agent/transport/stream contract in the monorepo,
 use the parent `daedalus-co-design` skill and assess its affected consumers. Keep

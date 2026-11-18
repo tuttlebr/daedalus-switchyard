@@ -1,4 +1,4 @@
 interface:
   display_name: "Switchyard Provider Config"
-  short_description: "Review and edit provider TOML configs through Q&A"
-  default_prompt: "Use $switchyard-provider-config to review all provider TOMLs against provider specifications and Switchyard compatibility, or help me add or modify one through Q&A."
+  short_description: "Review, edit, and live-test provider configurations"
+  default_prompt: "Use $switchyard-provider-config to review or edit provider TOMLs, and when I authorize live tests, validate selected endpoints, reasoning controls, and extra_body arguments."
