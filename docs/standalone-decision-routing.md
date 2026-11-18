@@ -15,10 +15,17 @@ probability gates and service failures choose the default for this request only.
 The next request runs classification again. Provider failure tries only the
 default after the selected target. Explicit profile aliases bypass classification.
 
-The existing per-choice probability thresholds, provider mappings, credentials,
-service addresses, public aliases and ports are preserved. Caller-supplied
-reasoning effort still overrides a selected target's default; QA should omit
-that override when measuring automatic effort changes.
+Change category criteria and probability gates in
+`config/routing/four-category.toml`, decision endpoint/budget settings in
+`config/decision/elephant.toml`, and target models/defaults in the selected
+`config/llms/` fragment. The root profile can override any of these when composed.
+Caller-supplied reasoning fields override a selected target's defaults through
+a shallow merge; omit those overrides when measuring the configured mapping.
+
+The decision server is a separately provisioned dependency. The gateway discovers
+its model, prepares the classifier request and uses its scores; it does not
+install or train that model. A healthy gateway can still fall back on every
+automatic request if discovery, tokenization or classification fails.
 
 Routing does not provide a local-processing or privacy boundary.
 The judge receives the opening task, latest user instruction and six recent
@@ -49,12 +56,13 @@ probability gates, timeout/invalid-decision recovery, provider fallback and
 explicit profile bypass. These are deterministic contract tests, not model
 quality calibration.
 
-## QA after maintenance
+## Check a routing change
 
 1. Validate the selected provider file against the intended built image. Promote
    compatible image/configuration together through the deployment capability gate.
-2. Run `make test ROUTES_FILE=<selected-provider-file>` for route smoke
-   checks. This does not run the separate 20-question judge probe.
+2. Run `make test ROUTES_FILE=<selected-provider-file>` for live route smoke
+   checks against the intended gateway. This sends model traffic and does not
+   run the separate 20-question judge probe.
 3. Run the 20-question probe against a reachable decision service using the
    command below. This checks the question and score gates only.
 4. Replay representative multi-step tasks against the automatic alias and fixed

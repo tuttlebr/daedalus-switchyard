@@ -1,5 +1,11 @@
 # Provider streaming and reasoning review — 2026-11-18
 
+This is a historical review snapshot. Provider files and the available profiles
+have changed since it was written, including the addition of blended routing.
+Use the [configuration guide](../README.md#provider-configurations) and compose
+the selected `routes_*.toml` for current behavior; the tables and test results
+below describe only the reviewed configuration.
+
 All six provider fragments and six composed entrypoints define streaming for all
 24 generation targets. The tested gateway enforces SSE even when callers omit
 `stream` or send `false`. Reasoning defaults are present everywhere, but Nebius

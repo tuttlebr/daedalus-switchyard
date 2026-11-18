@@ -34,6 +34,24 @@ separate evidence; validate all affected owners when their shared contract chang
 The parent monorepo's `daedalus-co-design` skill coordinates these checks and
 retains sanitized lessons. Repository tests remain the gateway's local contract.
 
+### Connect an Agent or another client
+
+Set the Agent's `TOOL_CALLING_LLM_MODEL_BASE_URL` to this gateway's reachable
+API root ending in `/v1`, and `TOOL_CALLING_LLM_MODEL_MODEL` to `daedalus` for
+automatic routing. Its explicit `workflow.model_routes` must resolve to aliases
+in the selected profile. Omitting the Agent's `model_profile` uses that main
+model; it does not independently turn on gateway routing.
+
+Provider credentials belong to the gateway and are selected by `api_key_env`.
+The bundled caller interface has no bearer-key requirement; an Agent client
+that requires a nonempty key can use a non-secret placeholder. Frontend Daedalus
+application API keys authenticate the Agent application, a separate endpoint.
+
+Use SSE-capable clients for gateway generation. Calling the gateway directly
+returns model output and proposed tool calls; your client executes those tools
+and submits their results. To use Daedalus's configured tools, user scope and
+chat persistence, call the Agent's frontend compatibility API instead.
+
 ## Provider configurations
 
 Selectable provider sources are every root-level `routes_*.toml` file. Discover
@@ -94,6 +112,15 @@ and four public aliases. A profile can override individual settings with a
 local table such as `[routes.stage.classifier.choices.low]`. Remove a local
 override to inherit the shared value again.
 
+`routes_blended.toml` selects `config/llms/blended.toml`, which defines clients
+for multiple providers and assigns a client to each target. This is a normal
+composed profile: the classifier still chooses among four task categories.
+Provider diversity does not add general cross-provider failover; the automatic
+route's configured `default_target` remains its fallback. API-key discovery
+includes every declared client, even a client not currently used by a target,
+so supply its credentials or deliberately remove that unused declaration in
+your own profile. Inspect the composed file for current models and settings.
+
 Inspect the composed configuration without resolving header variables:
 
 ```bash
@@ -148,8 +175,8 @@ Uncertain, below-gate, timeout and invalid decisions use the selected file's
 tries that default only when it differs from the selected target. There is no
 retained effort floor or general cross-provider failover.
 
-The four-category migration preserves target models/bodies, explicit aliases,
-retained probability gates and fallbacks. Provider-specific native effort may
+Classifier policy and provider target definitions are configured separately.
+Provider-specific native effort may
 differ from the profile label: inspect the actual target `extra_body`. In
 particular, `instant` does not promise disabled reasoning. Thresholds measure
 classifier preference, not answer correctness, and category names do not prove
@@ -204,6 +231,13 @@ must use the rendered file. Provider credentials remain in their configured
 environment variables, discovered by `scripts/list_api_key_envs.py`.
 
 ## Automatic decision service
+
+Provision the decision service separately and make its configured endpoint
+reachable from the gateway. This repository builds the gateway; its chart does
+not install the classifier model server. `/health` checks the gateway process,
+so also check classification through the selected route when integrating a new
+decision endpoint. Explicit aliases can work while automatic requests fall back
+because the classifier is unavailable.
 
 The `[routes.stage]` table uses `decision_api`. With `model = "auto"`, the gateway
 discovers the service's served model through `/v1/models` on each classification.

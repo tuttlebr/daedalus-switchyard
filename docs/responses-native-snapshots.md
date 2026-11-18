@@ -1,10 +1,14 @@
 # Native Responses snapshots
 
-The pinned upstream decoder projects provider events into an append-only neutral
-stream. A `response.output_item.done` or `response.completed` snapshot that
-replaces earlier text or function arguments raises a projection conflict. Before
-the local patch, observing this conflict during exact native replay marked the
-outbound encoder errored and dropped subsequent events, including completion.
+Native Responses providers can correct earlier text or function arguments in
+`response.output_item.done` or `response.completed`. Treat these snapshots as
+authoritative when consuming the native Responses stream. The gateway preserves
+the correction and terminal event so the Agent and its clients can replace the
+earlier value rather than append it twice.
+
+The pinned upstream decoder also projects events into an append-only neutral
+stream for other output formats. That representation cannot express a replacement,
+so a correcting snapshot raises a projection conflict.
 
 `patches/responses-native-snapshots.patch` introduces a distinct internal
 `SnapshotConflict` chunk so observers preserve the remaining native stream.
@@ -12,7 +16,8 @@ It keeps exact native Responses replay alive for these authoritative snapshots a
 even when the neutral projection cannot express the correction. Provider `error`
 and `response.failed` events still terminate native streams. Chat/Anthropic
 translation continues to reject corrections that its append-only output cannot
-represent. No route, model, credential or network settings change.
+represent. Choose native Responses when the consumer needs replacement semantics;
+a Chat or Anthropic consumer cannot represent every native correction.
 
 The Docker builder runs the upstream protocol, translation and algorithm tests,
 including the

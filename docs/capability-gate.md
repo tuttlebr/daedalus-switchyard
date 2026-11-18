@@ -55,13 +55,32 @@ turn a failure into a pass.
 `CAPABILITY_TIMEOUT` and `CAPABILITY_MAX_OUTPUT_TOKENS` set deployment probe
 budgets; defaults are 60 seconds per request and 4096 output tokens.
 
-Run the same bounded check independently after exporting the credentials named
-in the TOML. It is suitable for a scheduled availability check; it is not a
-Kubernetes readiness probe.
+To check a selected profile independently, export the credentials named in its
+TOML and render header placeholders before calling the helper. The helper composes
+includes but does not interpolate `${GLOBAL_SESSION_ID}` itself. Keep rendered
+headers and reports in a private directory. This sends real provider requests;
+choose the profile and an overall time budget before running it. No recurring
+check is installed by this repository.
 
 ```bash
-python3 scripts/check_capabilities.py routes_fireworks.toml \
-  --timeout 60 --max-output-tokens 4096 --report /tmp/model-capabilities.json
+umask 077
+probe_dir="$(mktemp -d)"
+bash scripts/render_routes.sh routes_fireworks.toml "$probe_dir/routes.toml"
+timeout 15m python3 scripts/check_capabilities.py "$probe_dir/routes.toml" \
+  --timeout 60 --max-output-tokens 4096 --report "$probe_dir/capabilities.json"
+# Inspect the private report, then remove the temporary directory when finished.
+```
+
+The per-request timeout is separate from the outer deadline (`timeout` requires
+GNU coreutils or an equivalent process deadline on your platform). Each successful
+distinct settings group sends five generation requests plus model discovery.
+The helper forces streaming, replaces output-token limits with its CLI cap, and
+sets `store=false` for Responses. It checks completed text and tool continuation;
+it does not establish that every configured reasoning control affects inference.
+
+Run the local helper tests without model traffic:
+
+```bash
 python3 -m unittest discover -s tests -p test_capabilities.py
 ```
 
