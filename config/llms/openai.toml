@@ -1,4 +1,5 @@
 # Provider clients and generation targets.
+# stream=true enforces SSE for every generation call (including caller stream=false).
 [llm_clients.openai]
 format = "openai_responses"
 base_url = "https://api.openai.com/v1"
@@ -8,23 +9,24 @@ api_key_env = "OPENAI_API_KEY"
 id = "max"
 model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "max" }, store = false }
+extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "max" }, store = false }
 
 [targets.high]
 id = "high"
 model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "high" }, store = false }
+extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "high" }, store = false }
 
 [targets.low]
 id = "low"
 model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "low" }, store = false }
+extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "low" }, store = false }
 
+# Terra does not support minimal; instant keeps reasoning on at low.
 [targets.instant]
 id = "instant"
 model = "gpt-6.1-terra"
 llm_client = "openai"
-extra_body = { text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "minimal" }, store = false }
+extra_body = { stream = true, text = { verbosity = "low" }, reasoning = { summary = "concise", effort = "low" }, store = false }
 # ------------------------------------------------------------------------------

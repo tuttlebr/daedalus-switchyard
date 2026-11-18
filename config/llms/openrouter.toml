@@ -1,4 +1,5 @@
 # Provider clients and generation targets.
+# stream=true enforces SSE for every generation call (including caller stream=false).
 [llm_clients.openrouter]
 format = "openai_responses"
 base_url = "https://openrouter.ai/api/v1"
@@ -8,23 +9,23 @@ api_key_env = "OPENROUTER_API_KEY"
 id = "max"
 model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
-extra_body = { reasoning = { enabled = true, effort = "max" } }
+extra_body = { stream = true, reasoning = { enabled = true, effort = "max" } }
 
 [targets.high]
 id = "high"
 model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
-extra_body = { reasoning = { enabled = true, effort = "high" } }
+extra_body = { stream = true, reasoning = { enabled = true, effort = "high" } }
 
 [targets.low]
 id = "low"
 model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
-extra_body = { reasoning = { enabled = true, effort = "low" } }
+extra_body = { stream = true, reasoning = { enabled = true, effort = "low" } }
 
 [targets.instant]
 id = "instant"
 model = "deepseek/deepseek-v4.1-flash-1017:nitro"
 llm_client = "openrouter"
-extra_body = { reasoning = { enabled = true, effort = "minimal" } }
+extra_body = { stream = true, reasoning = { enabled = true, effort = "minimal" } }
 # ------------------------------------------------------------------------------

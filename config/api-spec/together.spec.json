@@ -1,0 +1,2621 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Together Responses API compatibility reference",
+    "version": "1.0.0",
+    "description": "Locally maintained, documentation-derived profile of Together Responses. Not an official Together OpenAPI export. Includes Together-documented features with OpenAI-derived wire schemas; nested constraints and event payloads are reference assumptions, not proof of runtime compatibility."
+  },
+  "externalDocs": {
+    "description": "Together Responses API compatibility guide",
+    "url": "https://docs.together.ai/docs/inference/responses-api"
+  },
+  "servers": [
+    {
+      "url": "https://api.together.ai",
+      "description": "Serverless inference"
+    },
+    {
+      "url": "https://api-inference.together.ai",
+      "description": "Dedicated model inference; use an endpoint identifier as model"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "x-provenance": {
+    "checked_on": "2026-11-18",
+    "openai_reference": "https://developers.openai.com/api/reference/resources/responses",
+    "openai_schema": "https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.json",
+    "openai_schema_sha256": "05b3f6b7aad8d05038d993f0cfdfe7770c2cf337eefbaf60018900a2685a7281",
+    "together_reference": "https://docs.together.ai/docs/inference/responses-api",
+    "together_reference_sha256": "61bf43850b9952368d6fc74d28b32367517d8b67b8bd4e52022e23ffc24e76bc",
+    "live_provider_validation": false,
+    "openai_license": "The MIT License\n\nCopyright (c) OpenAI (https://openai.com)\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in\nall copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\nTHE SOFTWARE."
+  },
+  "x-together-compatibility": {
+    "scope": "POST /v1/responses only. Absence from the modeled subset means unverified unless explicitly listed unsupported. OpenAI nested wire shapes are inherited and require provider testing before strict runtime validation.",
+    "documented_request_fields": [
+      "model",
+      "input",
+      "instructions",
+      "stream",
+      "tools",
+      "tool_choice",
+      "parallel_tool_calls",
+      "reasoning",
+      "include",
+      "text",
+      "store"
+    ],
+    "unsupported_request_fields": [
+      "previous_response_id",
+      "conversation",
+      "background"
+    ],
+    "openai_request_fields_not_confirmed": [
+      "access_programs",
+      "background_options",
+      "context_management",
+      "image",
+      "max_output_tokens",
+      "max_tool_calls",
+      "metadata",
+      "moderation",
+      "prompt",
+      "prompt_cache_key",
+      "prompt_cache_options",
+      "prompt_cache_retention",
+      "safety_identifier",
+      "service_tier",
+      "stream_options",
+      "temperature",
+      "top_logprobs",
+      "top_p",
+      "truncation",
+      "user"
+    ],
+    "unsupported_operations": [
+      "responses.retrieve",
+      "responses.delete",
+      "responses.cancel",
+      "responses.input_items.list",
+      "responses.input_tokens.count",
+      "responses.compact",
+      "conversations.*"
+    ],
+    "unsupported_tools": [
+      "file_search",
+      "code_interpreter",
+      "image_generation",
+      "computer_use_preview",
+      "remote MCP"
+    ],
+    "web_search": "Removed from the request by Together; forcing web_search with tool_choice returns HTTP 400. Not represented as an available tool.",
+    "tool_details": "Together documents function, custom, shell, local_shell, and apply_patch tools. Detailed custom/shell/patch wire schemas come from OpenAI; advanced options are unverified.",
+    "store": "Ignored for persistence; even true does not store the response.",
+    "supported_model_ids": [
+      "zai-org/GLM-5.2",
+      "zai-org/GLM-5.3",
+      "zai-org/GLM-5.3-Flash",
+      "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    ],
+    "models_note": "Snapshot of Together documentation on checked_on. Other serverless models may accept requests but can produce malformed output.",
+    "reasoning_behavior": {
+      "GLM-5.3": "Reasons at every effort, including none.",
+      "GLM-5.2": "minimal disables reasoning; low and medium request maximum effort; high requests high effort.",
+      "DeepSeek V4.1 Flash": "none disables reasoning."
+    },
+    "sdk_only_fields": [
+      "output_text"
+    ],
+    "image_and_file_inputs": "Images depend on model support; file inputs are unsupported. Image parts with only file_id are silently dropped.",
+    "streaming": "Together event names are documented; exact payload requirements and additional error/custom-tool events have not been verified."
+  },
+  "paths": {
+    "/v1/responses": {
+      "post": {
+        "operationId": "createResponse",
+        "summary": "Create a Together model response",
+        "description": "Create a stateless response with optional streaming and client-side tool calls. Append prior output and tool results to input for continuation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResponse"
+              },
+              "examples": {
+                "text": {
+                  "value": {
+                    "model": "zai-org/GLM-5.3",
+                    "input": "Explain database indexing briefly."
+                  }
+                },
+                "function": {
+                  "value": {
+                    "model": "zai-org/GLM-5.3",
+                    "input": "What is the weather in Paris?",
+                    "tools": [
+                      {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "Get weather for a city.",
+                        "parameters": {
+                          "type": "object",
+                          "properties": {
+                            "city": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "city"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                "stream": {
+                  "value": {
+                    "model": "zai-org/GLM-5.3",
+                    "input": "Write a haiku.",
+                    "stream": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Model response or server-sent event stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseStreamEvent"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Together error. Inspect HTTP status; provider codes may differ from OpenAI.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Together API key"
+      }
+    },
+    "schemas": {
+      "ApplyPatchCallOutputStatusParam": {
+        "type": "string",
+        "enum": [
+          "completed",
+          "failed"
+        ],
+        "title": "Apply patch call output status"
+      },
+      "ApplyPatchCallStatus": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "completed"
+        ]
+      },
+      "ApplyPatchCallStatusParam": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "completed"
+        ],
+        "title": "Apply patch call status"
+      },
+      "ApplyPatchCreateFileOperation": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "create_file"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "path",
+          "diff"
+        ],
+        "title": "Apply patch create file operation"
+      },
+      "ApplyPatchCreateFileOperationParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "create_file"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "diff": {
+            "type": "string",
+            "maxLength": 10485760
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "path",
+          "diff"
+        ],
+        "title": "Apply patch create file operation"
+      },
+      "ApplyPatchDeleteFileOperation": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "delete_file"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "path"
+        ],
+        "title": "Apply patch delete file operation"
+      },
+      "ApplyPatchDeleteFileOperationParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "delete_file"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "path"
+        ],
+        "title": "Apply patch delete file operation"
+      },
+      "ApplyPatchOperationParam": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ApplyPatchCreateFileOperationParam"
+          },
+          {
+            "$ref": "#/components/schemas/ApplyPatchDeleteFileOperationParam"
+          },
+          {
+            "$ref": "#/components/schemas/ApplyPatchUpdateFileOperationParam"
+          }
+        ],
+        "title": "Apply patch operation"
+      },
+      "ApplyPatchToolCall": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "apply_patch_call"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApplyPatchCallStatus"
+          },
+          "operation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ApplyPatchCreateFileOperation"
+              },
+              {
+                "$ref": "#/components/schemas/ApplyPatchDeleteFileOperation"
+              },
+              {
+                "$ref": "#/components/schemas/ApplyPatchUpdateFileOperation"
+              }
+            ],
+            "title": "Apply patch operation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "call_id",
+          "status",
+          "operation"
+        ],
+        "title": "Apply patch tool call"
+      },
+      "ApplyPatchToolCallItemParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "apply_patch_call"
+            ]
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApplyPatchCallStatusParam"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/ApplyPatchOperationParam"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "call_id",
+          "status",
+          "operation"
+        ],
+        "title": "Apply patch tool call"
+      },
+      "ApplyPatchToolCallOutputItemParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "apply_patch_call_output"
+            ]
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApplyPatchCallOutputStatusParam"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10485760
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "call_id",
+          "status"
+        ],
+        "title": "Apply patch tool call output"
+      },
+      "ApplyPatchToolParam": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "apply_patch"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "ApplyPatchUpdateFileOperation": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "update_file"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "path",
+          "diff"
+        ],
+        "title": "Apply patch update file operation"
+      },
+      "ApplyPatchUpdateFileOperationParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "update_file"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "diff": {
+            "type": "string",
+            "maxLength": 10485760
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "path",
+          "diff"
+        ],
+        "title": "Apply patch update file operation"
+      },
+      "CacheWriteTokensDetails": {
+        "properties": {
+          "ttl_30m_tokens": {
+            "type": "integer"
+          },
+          "ttl_12h_tokens": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ttl_30m_tokens",
+          "ttl_12h_tokens"
+        ]
+      },
+      "CreateResponse": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Together model identifier, or a dedicated endpoint identifier when using the dedicated inference server."
+          },
+          "input": {
+            "$ref": "#/components/schemas/InputParam"
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stream": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "$ref": "#/components/schemas/ToolsArray"
+          },
+          "tool_choice": {
+            "$ref": "#/components/schemas/ToolChoiceParam"
+          },
+          "parallel_tool_calls": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reasoning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "reasoning.encrypted_content"
+              ]
+            }
+          },
+          "text": {
+            "$ref": "#/components/schemas/ResponseTextParam"
+          },
+          "store": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Together does not persist responses, including when this flag is true."
+          },
+          "previous_response_id": false,
+          "conversation": false,
+          "background": false
+        },
+        "required": [
+          "model",
+          "input"
+        ],
+        "additionalProperties": true,
+        "description": "Together-documented request subset. Send full history, including previous output items and tool results. Other OpenAI request fields are not confirmed by this profile; additionalProperties allows extensions without asserting support."
+      },
+      "CustomGrammarFormatParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "grammar"
+            ]
+          },
+          "syntax": {
+            "$ref": "#/components/schemas/GrammarSyntax1"
+          },
+          "definition": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "syntax",
+          "definition"
+        ],
+        "title": "Grammar format"
+      },
+      "CustomTextFormatParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "text"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "Text format"
+      },
+      "CustomToolCall": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "custom_tool_call"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "input": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "call_id",
+          "name",
+          "input"
+        ]
+      },
+      "CustomToolCallOutput": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "custom_tool_call_output"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "output": {
+            "oneOf": [
+              {
+                "type": "string",
+                "title": "string output"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FunctionAndCustomToolCallOutput"
+                },
+                "title": "output content list"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "call_id",
+          "output"
+        ]
+      },
+      "CustomToolParam": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "custom"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CustomTextFormatParam"
+              },
+              {
+                "$ref": "#/components/schemas/CustomGrammarFormatParam"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "name"
+        ]
+      },
+      "EasyInputMessage": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "developer"
+            ]
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "string",
+                "title": "Text input"
+              },
+              {
+                "$ref": "#/components/schemas/InputMessageContentList"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "param": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "message",
+          "param",
+          "code"
+        ],
+        "description": "OpenAI-shaped error envelope; Together error type and code values can differ. Handle errors by HTTP status."
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "FunctionAndCustomToolCallOutput": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InputTextContent"
+          },
+          {
+            "$ref": "#/components/schemas/InputImageContent"
+          }
+        ]
+      },
+      "FunctionCallItemStatus": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "completed",
+          "incomplete"
+        ]
+      },
+      "FunctionCallOutputItemParam": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "function_call_output"
+            ]
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FunctionCallItemStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "call_id",
+          "output"
+        ]
+      },
+      "FunctionShellAction": {
+        "properties": {
+          "commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_output_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "commands",
+          "timeout_ms",
+          "max_output_length"
+        ],
+        "title": "Shell exec action"
+      },
+      "FunctionShellActionParam": {
+        "properties": {
+          "commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_output_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "commands"
+        ],
+        "title": "Shell action"
+      },
+      "FunctionShellCall": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "shell_call"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/components/schemas/FunctionShellAction"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FunctionShellCallStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "call_id",
+          "action",
+          "status"
+        ],
+        "title": "Shell tool call"
+      },
+      "FunctionShellCallItemParam": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "shell_call"
+            ]
+          },
+          "action": {
+            "$ref": "#/components/schemas/FunctionShellActionParam"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FunctionShellCallItemStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "type",
+          "action"
+        ],
+        "title": "Shell tool call"
+      },
+      "FunctionShellCallItemStatus": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "completed",
+          "incomplete"
+        ],
+        "title": "Shell call status"
+      },
+      "FunctionShellCallOutputContentParam": {
+        "properties": {
+          "stdout": {
+            "type": "string",
+            "maxLength": 10485760
+          },
+          "stderr": {
+            "type": "string",
+            "maxLength": 10485760
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/FunctionShellCallOutputOutcomeParam"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stdout",
+          "stderr",
+          "outcome"
+        ],
+        "title": "Shell output content"
+      },
+      "FunctionShellCallOutputExitOutcomeParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "exit"
+            ]
+          },
+          "exit_code": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "exit_code"
+        ],
+        "title": "Shell call exit outcome"
+      },
+      "FunctionShellCallOutputItemParam": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "shell_call_output"
+            ]
+          },
+          "output": {
+            "items": {
+              "$ref": "#/components/schemas/FunctionShellCallOutputContentParam"
+            },
+            "type": "array"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FunctionShellCallItemStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_output_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "type",
+          "output"
+        ],
+        "title": "Shell tool call output"
+      },
+      "FunctionShellCallOutputOutcomeParam": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FunctionShellCallOutputTimeoutOutcomeParam"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionShellCallOutputExitOutcomeParam"
+          }
+        ],
+        "title": "Shell call outcome"
+      },
+      "FunctionShellCallOutputTimeoutOutcomeParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "timeout"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "Shell call timeout outcome"
+      },
+      "FunctionShellCallStatus": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "completed",
+          "incomplete"
+        ]
+      },
+      "FunctionShellToolParam": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "shell"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "description": "Client-executed shell tool. Hosted container execution is not represented."
+      },
+      "FunctionTool": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "function"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strict": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "parameters"
+        ]
+      },
+      "FunctionToolCall": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "function_call"
+          },
+          "id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "incomplete"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "call_id",
+          "name",
+          "arguments"
+        ]
+      },
+      "GrammarSyntax1": {
+        "type": "string",
+        "enum": [
+          "lark",
+          "regex"
+        ]
+      },
+      "ImageDetail": {
+        "type": "string",
+        "enum": [
+          "low",
+          "high",
+          "auto",
+          "original"
+        ]
+      },
+      "InputContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InputTextContent"
+          },
+          {
+            "$ref": "#/components/schemas/InputImageContent"
+          }
+        ]
+      },
+      "InputImageContent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "input_image"
+            ]
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detail": {
+            "$ref": "#/components/schemas/ImageDetail"
+          }
+        },
+        "required": [
+          "type",
+          "image_url"
+        ],
+        "description": "Model-dependent: Together documents image support for GLM-5.3 Flash and DeepSeek V4.1 Flash, not GLM-5.3 or GLM-5.2. Supply image_url; Together drops image parts that contain only file_id. Input files are unsupported."
+      },
+      "InputItem": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/EasyInputMessage"
+          },
+          {
+            "$ref": "#/components/schemas/InputMessage"
+          },
+          {
+            "$ref": "#/components/schemas/OutputMessage"
+          },
+          {
+            "$ref": "#/components/schemas/ReasoningItem"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionCallOutputItemParam"
+          },
+          {
+            "$ref": "#/components/schemas/CustomToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/CustomToolCallOutput"
+          },
+          {
+            "$ref": "#/components/schemas/LocalShellToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/LocalShellToolCallOutput"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionShellCallItemParam"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionShellCallOutputItemParam"
+          },
+          {
+            "$ref": "#/components/schemas/ApplyPatchToolCallItemParam"
+          },
+          {
+            "$ref": "#/components/schemas/ApplyPatchToolCallOutputItemParam"
+          }
+        ]
+      },
+      "InputMessage": {
+        "type": "object",
+        "title": "Input message",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "message"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "system",
+              "developer"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "incomplete"
+            ]
+          },
+          "content": {
+            "$ref": "#/components/schemas/InputMessageContentList"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ]
+      },
+      "InputMessageContentList": {
+        "type": "array",
+        "title": "Input item content list",
+        "items": {
+          "$ref": "#/components/schemas/InputContent"
+        }
+      },
+      "InputParam": {
+        "oneOf": [
+          {
+            "type": "string",
+            "title": "Text input"
+          },
+          {
+            "type": "array",
+            "title": "Input item list",
+            "items": {
+              "$ref": "#/components/schemas/InputItem"
+            }
+          }
+        ]
+      },
+      "InputTextContent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "input_text"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ]
+      },
+      "LocalShellExecAction": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "exec"
+            ]
+          },
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "working_directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "command",
+          "env"
+        ],
+        "title": "Local shell exec action"
+      },
+      "LocalShellToolCall": {
+        "type": "object",
+        "title": "Local shell call",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local_shell_call"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/components/schemas/LocalShellExecAction"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "incomplete"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "call_id",
+          "action",
+          "status"
+        ]
+      },
+      "LocalShellToolCallOutput": {
+        "type": "object",
+        "title": "Local shell call output",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local_shell_call_output"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "in_progress",
+                  "completed",
+                  "incomplete"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "call_id",
+          "output"
+        ]
+      },
+      "LocalShellToolParam": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local_shell"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "Local shell tool"
+      },
+      "LogProb": {
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "logprob": {
+            "type": "number"
+          },
+          "bytes": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "top_logprobs": {
+            "items": {
+              "$ref": "#/components/schemas/TopLogProb"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "logprob",
+          "bytes",
+          "top_logprobs"
+        ],
+        "title": "Log probability"
+      },
+      "OutputContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OutputTextContent"
+          },
+          {
+            "$ref": "#/components/schemas/RefusalContent"
+          },
+          {
+            "$ref": "#/components/schemas/ReasoningTextContent"
+          }
+        ]
+      },
+      "OutputItem": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OutputMessage"
+          },
+          {
+            "$ref": "#/components/schemas/ReasoningItem"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/CustomToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/LocalShellToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionShellCall"
+          },
+          {
+            "$ref": "#/components/schemas/ApplyPatchToolCall"
+          }
+        ]
+      },
+      "OutputMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "const": "message"
+          },
+          "role": {
+            "type": "string",
+            "const": "assistant"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutputMessageContent"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "incomplete"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "role",
+          "content",
+          "status"
+        ]
+      },
+      "OutputMessageContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OutputTextContent"
+          },
+          {
+            "$ref": "#/components/schemas/RefusalContent"
+          }
+        ]
+      },
+      "OutputTextContent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "output_text"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "annotations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "logprobs": {
+            "items": {
+              "$ref": "#/components/schemas/LogProb"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "Output text"
+      },
+      "Reasoning": {
+        "type": "object",
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              null
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "concise",
+                  "detailed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "description": "Together forwards effort to the model template; behavior depends on the model. No reasoning summaries are generated. These provider values are separate from Switchyard public effort aliases."
+      },
+      "ReasoningItem": {
+        "type": "object",
+        "title": "Reasoning",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "reasoning"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "encrypted_content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When requested through include, Together returns base64-encoded reasoning text here. The content is not encrypted."
+          },
+          "summary": {
+            "type": "array",
+            "maxItems": 0,
+            "items": {
+              "type": "object"
+            }
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReasoningTextContent"
+            },
+            "description": "Full reasoning text, expressed as reasoning_text content parts."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "incomplete"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "summary",
+          "type"
+        ]
+      },
+      "ReasoningTextContent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "reasoning_text"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "Reasoning text"
+      },
+      "RefusalContent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "refusal"
+            ]
+          },
+          "refusal": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "refusal"
+        ],
+        "title": "Refusal"
+      },
+      "Response": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "const": "response"
+          },
+          "created_at": {
+            "type": "number",
+            "format": "unixtime"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "failed",
+              "in_progress",
+              "cancelled",
+              "queued",
+              "incomplete"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "output": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutputItem"
+            }
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResponseUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Error"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "incomplete_details": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tools": {
+            "$ref": "#/components/schemas/ToolsArray"
+          },
+          "tool_choice": {
+            "$ref": "#/components/schemas/ToolChoiceParam"
+          },
+          "parallel_tool_calls": {
+            "type": "boolean"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reasoning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "$ref": "#/components/schemas/ResponseTextParam"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "output"
+        ]
+      },
+      "ResponseCompletedEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.completed"
+          },
+          "response": {
+            "$ref": "#/components/schemas/Response"
+          },
+          "sequence_number": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "response",
+          "sequence_number"
+        ]
+      },
+      "ResponseContentPartAddedEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.content_part.added"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "content_index": {
+            "type": "integer"
+          },
+          "part": {
+            "$ref": "#/components/schemas/OutputContent"
+          },
+          "sequence_number": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "content_index",
+          "part",
+          "sequence_number"
+        ]
+      },
+      "ResponseContentPartDoneEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.content_part.done"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "content_index": {
+            "type": "integer"
+          },
+          "sequence_number": {
+            "type": "integer"
+          },
+          "part": {
+            "$ref": "#/components/schemas/OutputContent"
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "content_index",
+          "part",
+          "sequence_number"
+        ]
+      },
+      "ResponseCreatedEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.created"
+          },
+          "response": {
+            "$ref": "#/components/schemas/Response"
+          },
+          "sequence_number": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "response",
+          "sequence_number"
+        ]
+      },
+      "ResponseFormatJsonSchemaSchema": {
+        "type": "object",
+        "title": "JSON schema",
+        "additionalProperties": true
+      },
+      "ResponseFormatText": {
+        "type": "object",
+        "title": "Text",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "text"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "ResponseFunctionCallArgumentsDeltaEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.function_call_arguments.delta"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "sequence_number": {
+            "type": "integer"
+          },
+          "delta": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "delta",
+          "sequence_number"
+        ]
+      },
+      "ResponseFunctionCallArgumentsDoneEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.function_call_arguments.done"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "sequence_number": {
+            "type": "integer"
+          },
+          "arguments": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "arguments",
+          "sequence_number"
+        ]
+      },
+      "ResponseInProgressEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.in_progress"
+          },
+          "response": {
+            "$ref": "#/components/schemas/Response"
+          },
+          "sequence_number": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "response",
+          "sequence_number"
+        ]
+      },
+      "ResponseLogProb": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "logprob": {
+            "type": "number"
+          },
+          "top_logprobs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string"
+                },
+                "logprob": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "token",
+          "logprob"
+        ]
+      },
+      "ResponseOutputItemAddedEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.output_item.added"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "sequence_number": {
+            "type": "integer"
+          },
+          "item": {
+            "$ref": "#/components/schemas/OutputItem"
+          }
+        },
+        "required": [
+          "type",
+          "output_index",
+          "item",
+          "sequence_number"
+        ]
+      },
+      "ResponseOutputItemDoneEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.output_item.done"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "sequence_number": {
+            "type": "integer"
+          },
+          "item": {
+            "$ref": "#/components/schemas/OutputItem"
+          }
+        },
+        "required": [
+          "type",
+          "output_index",
+          "item",
+          "sequence_number"
+        ]
+      },
+      "ResponseReasoningTextDeltaEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.reasoning_text.delta"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "content_index": {
+            "type": "integer"
+          },
+          "delta": {
+            "type": "string"
+          },
+          "sequence_number": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "content_index",
+          "delta",
+          "sequence_number"
+        ]
+      },
+      "ResponseReasoningTextDoneEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.reasoning_text.done"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "content_index": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "sequence_number": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "content_index",
+          "text",
+          "sequence_number"
+        ]
+      },
+      "ResponseStreamEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ResponseCreatedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseInProgressEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseCompletedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseOutputItemAddedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseOutputItemDoneEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseContentPartAddedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseContentPartDoneEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseTextDeltaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseTextDoneEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseReasoningTextDeltaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseReasoningTextDoneEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseFunctionCallArgumentsDeltaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseFunctionCallArgumentsDoneEvent"
+          }
+        ],
+        "description": "Event vocabulary explicitly listed by Together. Payload structures are inherited from the OpenAI reference and have not been live-tested against Together."
+      },
+      "ResponseTextDeltaEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.output_text.delta"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "content_index": {
+            "type": "integer"
+          },
+          "delta": {
+            "type": "string"
+          },
+          "sequence_number": {
+            "type": "integer"
+          },
+          "logprobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResponseLogProb"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "content_index",
+          "delta",
+          "sequence_number",
+          "logprobs"
+        ]
+      },
+      "ResponseTextDoneEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "response.output_text.done"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "output_index": {
+            "type": "integer"
+          },
+          "content_index": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "sequence_number": {
+            "type": "integer"
+          },
+          "logprobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResponseLogProb"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "item_id",
+          "output_index",
+          "content_index",
+          "text",
+          "sequence_number",
+          "logprobs"
+        ]
+      },
+      "ResponseTextParam": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/TextResponseFormatConfiguration"
+          }
+        }
+      },
+      "ResponseUsage": {
+        "type": "object",
+        "properties": {
+          "input_tokens": {
+            "type": "integer"
+          },
+          "input_tokens_details": {
+            "type": "object",
+            "properties": {
+              "cached_tokens": {
+                "type": "integer"
+              },
+              "cache_write_tokens": {
+                "type": "integer"
+              },
+              "cache_write_tokens_details": {
+                "$ref": "#/components/schemas/CacheWriteTokensDetails"
+              }
+            },
+            "required": [
+              "cached_tokens",
+              "cache_write_tokens"
+            ]
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "output_tokens_details": {
+            "type": "object",
+            "properties": {
+              "reasoning_tokens": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "reasoning_tokens"
+            ]
+          },
+          "total_tokens": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "input_tokens_details",
+          "output_tokens",
+          "output_tokens_details",
+          "total_tokens"
+        ]
+      },
+      "TextResponseFormatConfiguration": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ResponseFormatText"
+          },
+          {
+            "$ref": "#/components/schemas/TextResponseFormatJsonSchema"
+          }
+        ]
+      },
+      "TextResponseFormatJsonSchema": {
+        "type": "object",
+        "title": "JSON schema",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "json_schema"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/ResponseFormatJsonSchemaSchema"
+          },
+          "strict": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "schema",
+          "name"
+        ]
+      },
+      "Tool": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FunctionTool"
+          },
+          {
+            "$ref": "#/components/schemas/CustomToolParam"
+          },
+          {
+            "$ref": "#/components/schemas/LocalShellToolParam"
+          },
+          {
+            "$ref": "#/components/schemas/FunctionShellToolParam"
+          },
+          {
+            "$ref": "#/components/schemas/ApplyPatchToolParam"
+          }
+        ],
+        "description": "All tool execution happens in the client application. Together does not execute these tools."
+      },
+      "ToolChoiceFunction": {
+        "type": "object",
+        "title": "Function tool",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "function"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name"
+        ]
+      },
+      "ToolChoiceOptions": {
+        "type": "string",
+        "title": "Tool choice mode",
+        "enum": [
+          "none",
+          "auto",
+          "required"
+        ]
+      },
+      "ToolChoiceParam": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ToolChoiceOptions"
+          },
+          {
+            "$ref": "#/components/schemas/ToolChoiceFunction"
+          }
+        ],
+        "description": "Together explicitly documents auto, required, none, and a named function choice."
+      },
+      "ToolsArray": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/Tool"
+        }
+      },
+      "TopLogProb": {
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "logprob": {
+            "type": "number"
+          },
+          "bytes": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "logprob",
+          "bytes"
+        ],
+        "title": "Top log probability"
+      }
+    }
+  }
+}

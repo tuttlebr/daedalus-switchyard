@@ -1,4 +1,5 @@
 # Provider clients and generation targets.
+# stream=true enforces SSE for every generation call (including caller stream=false).
 [llm_clients.together]
 format = "openai_responses"
 base_url = "https://api.together.ai/v1"
@@ -8,23 +9,23 @@ api_key_env = "TOGETHER_API_KEY"
 id = "max"
 model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 llm_client = "together"
-extra_body = { reasoning = { enabled = true, effort = "high" } }
+extra_body = { stream = true, reasoning = { effort = "high" } }
 
 [targets.high]
 id = "high"
 model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 llm_client = "together"
-extra_body = { reasoning = { enabled = true, effort = "medium" } }
+extra_body = { stream = true, reasoning = { effort = "medium" } }
 
 [targets.low]
 id = "low"
 model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 llm_client = "together"
-extra_body = { reasoning = { enabled = true, effort = "low" } }
+extra_body = { stream = true, reasoning = { effort = "low" } }
 
 [targets.instant]
 id = "instant"
 model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
 llm_client = "together"
-extra_body = { reasoning = { enabled = false } }
+extra_body = { stream = true, reasoning = { effort = "none" } }
 # ------------------------------------------------------------------------------

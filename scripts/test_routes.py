@@ -136,6 +136,35 @@ def http_error_message(error: HTTPError) -> str:
     return "request rejected"
 
 
+def streamed_text(response, timeout: float) -> str:
+    if not response.headers.get("Content-Type", "").startswith("text/event-stream"):
+        raise ValueError("expected a streaming Responses reply")
+    started = time.monotonic()
+    size = 0
+    data = []
+    for line in response:
+        size += len(line)
+        if size > 2_000_000 or time.monotonic() - started > timeout:
+            raise ValueError("stream exceeded the response budget")
+        if line.startswith(b"data:"):
+            data.append(line[5:].strip())
+        elif not line.strip() and data:
+            raw = b"\n".join(data)
+            data = []
+            if raw == b"[DONE]":
+                break
+            event = json.loads(raw)
+            if not isinstance(event, dict):
+                raise ValueError("invalid stream event")
+            if event.get("error") or event.get("type") == "error":
+                raise ValueError("API error in stream")
+            if event.get("type") in ("response.failed", "response.incomplete"):
+                raise ValueError("provider reported a failed or incomplete stream")
+            if event.get("type") == "response.completed":
+                return completed_text(event.get("response"))
+    raise ValueError("stream ended without a completed response")
+
+
 def run_tests(routes: dict[str, str], url: str, timeout: float, max_tokens: int) -> int:
     failed = 0
     for name, route_id in routes.items():
@@ -149,15 +178,15 @@ def run_tests(routes: dict[str, str], url: str, timeout: float, max_tokens: int)
                 data=json.dumps({
                     "model": route_id,
                     "input": "Reply with exactly OK.",
-                    "stream": False,
+                    "stream": True,
                     "max_output_tokens": max_tokens,
                 }).encode(),
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
                 method="POST",
             )
             with urlopen(request, timeout=timeout) as response:
                 status = f"HTTP {response.status}; "
-                text = completed_text(json.load(response))
+                text = streamed_text(response, timeout)
                 selected = response.headers.get("x-model-router-selected-model", "not reported")
             elapsed = time.monotonic() - started
             print(f"PASS {label}: {status}{elapsed:.2f}s; selected={compact(selected)}; {compact(text)}", flush=True)

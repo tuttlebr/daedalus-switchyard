@@ -33,6 +33,14 @@ class ResponsesTransportTest(unittest.TestCase):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 captured.append((self.path, body))
+                if self.path.endswith(("/input_tokens", "/compact")):
+                    raw = json.dumps({"object": "response.input_tokens", "input_tokens": 7}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
                 response = {
                     "id": "resp_fixture", "object": "response", "created_at": 1,
                     "status": "completed", "model": body["model"],
@@ -112,6 +120,21 @@ class ResponsesTransportTest(unittest.TestCase):
             upstream.server_close()
             thread.join(timeout=5)
 
+    def test_auxiliary_operations_do_not_inherit_generation_streaming(self):
+        with self.gateway(ROOT / "routes_openai.toml") as (url, captured, config, opener):
+            route = next(r for r in config["routes"].values() if r["type"] == "passthrough")
+            for operation in ("input_tokens", "compact"):
+                with self.subTest(operation=operation):
+                    request = Request(
+                        url + "/v1/responses/" + operation,
+                        data=json.dumps({"model": route["id"], "input": "Hello"}).encode(),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with opener.open(request, timeout=5) as response:
+                        self.assertTrue(response.headers["Content-Type"].startswith("application/json"))
+                        self.assertEqual(json.loads(response.read())["input_tokens"], 7)
+                    self.assertNotIn("stream", captured[-1][1])
+
     def test_native_aliases_preserve_streaming_effort_and_tool_continuations(self):
         exercised = 0
         for path in sorted(ROOT.glob("routes_*.toml")):
@@ -148,7 +171,7 @@ class ResponsesTransportTest(unittest.TestCase):
                                 )
                                 with opener.open(request, timeout=5) as response:
                                     raw = response.read()
-                                    if stream:
+                                    if target["extra_body"]["stream"]:
                                         events = [json.loads(line[6:]) for line in raw.splitlines()
                                                   if line.startswith(b"data: {")]
                                         self.assertTrue(any(event["type"] == "response.completed"
@@ -158,12 +181,12 @@ class ResponsesTransportTest(unittest.TestCase):
                                 endpoint, body = captured[-1]
                                 self.assertEqual(endpoint, "/v1/responses")
                                 self.assertEqual(body["model"], target["model"])
-                                self.assertEqual(body["stream"], stream)
+                                self.assertIs(body["stream"], True)
                                 self.assertEqual(body["input"][-2:], history[-2:])
                                 self.assertEqual(body.get("reasoning"), payload.get(
                                     "reasoning", target["extra_body"].get("reasoning")))
                                 for key, value in target["extra_body"].items():
-                                    self.assertEqual(body[key], payload.get(key, value))
+                                    self.assertEqual(body[key], True if key == "stream" else payload.get(key, value))
                                 self.assertEqual(body["max_output_tokens"], 32)
                                 exercised += 1
         self.assertGreater(exercised, 0, "No native Responses aliases discovered")

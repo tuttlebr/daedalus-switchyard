@@ -1,4 +1,4 @@
-"""Caller streaming choice and mid-stream failure framing for every provider file.
+"""Required streaming and mid-stream failure framing for every provider file.
 
 Callers reach each target through Chat or Responses, whatever the provider's
 own wire format. The gateway must answer in the mode the caller asked for and
@@ -203,25 +203,22 @@ class StreamContractTest(unittest.TestCase):
             upstream.server_close()
             thread.join(timeout=5)
 
-    def test_every_route_answers_in_the_mode_the_caller_requested(self):
+    def test_every_route_requires_streaming_for_true_false_and_omitted(self):
         exercised = 0
         for path in sorted(ROOT.glob("routes_*.toml")):
             with self.gateway(path) as (call, state, config):
                 for route in config["routes"].values():
                     for inbound in ("chat", "responses"):
-                        # Omitting stream is the API's non-streaming default.
+                        # The configured policy overrides even explicit false.
                         for stream in (False, None, True):
                             with self.subTest(provider=path.name, route=route["id"],
                                               inbound=inbound, stream=stream):
                                 content_type, raw = call(route["id"], inbound, stream)
                                 _endpoint, sent = state["captured"][-1]
-                                self.assertEqual(bool(sent.get("stream")), bool(stream))
-                                if stream:
-                                    self.assertTrue(content_type.startswith("text/event-stream"))
-                                    self.assertIn("data: ", raw)
-                                else:
-                                    self.assertTrue(content_type.startswith("application/json"))
-                                    self.assertIn("OK", json.dumps(json.loads(raw)))
+                                self.assertIs(sent.get("stream"), True)
+                                self.assertTrue(content_type.startswith("text/event-stream"))
+                                self.assertIn("data: ", raw)
+                                self.assertIn("OK", raw)
                                 exercised += 1
         self.assertGreater(exercised, 0, "No provider routes discovered")
 

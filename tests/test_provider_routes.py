@@ -60,13 +60,12 @@ class ProviderRoutesTest(unittest.TestCase):
                 for target in config["targets"].values():
                     self.assertNotIn(target["model"], text)
 
-    def test_payload_defaults_keep_caller_streaming_choice(self):
-        # A target stream default replaces the caller's choice whenever the
-        # request is translated between Chat and Responses or omits stream.
+    def test_payload_defaults_require_streaming(self):
+        # Every shipped target opts into the required-streaming transport policy.
         for name, config in providers():
             for key, target in config["targets"].items():
                 with self.subTest(provider=name, target=key):
-                    self.assertNotIn("stream", target.get("extra_body", {}))
+                    self.assertIs(target.get("extra_body", {}).get("stream"), True)
                     if config["llm_clients"][target["llm_client"]]["format"] == "openai_chat":
                         self.assertNotIn("truncation", target.get("extra_body", {}))
 

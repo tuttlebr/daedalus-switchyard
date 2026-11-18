@@ -1,4 +1,5 @@
 # Provider clients and generation targets.
+# stream=true enforces SSE for every generation call (including caller stream=false).
 [llm_clients.fireworks]
 format = "openai_responses"
 base_url = "https://api.fireworks.ai/inference/v1"
@@ -9,23 +10,24 @@ extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-af
 id = "max"
 model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "max", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
+extra_body = { stream = true, reasoning = { effort = "max" } }
 
 [targets.high]
 id = "high"
 model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "xhigh", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
+extra_body = { stream = true, reasoning = { effort = "high" } }
 
 [targets.low]
 id = "low"
 model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "medium", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
+extra_body = { stream = true, reasoning = { effort = "low" } }
 
+# Keep reasoning enabled; instant shares the lightest depth with low.
 [targets.instant]
 id = "instant"
 model = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 llm_client = "fireworks"
-extra_body = { reasoning_effort = "low", reasoning_history = "disabled", context_length_exceeded_behavior = "truncate", safe_tokenization = true }
+extra_body = { stream = true, reasoning = { effort = "low" } }
 # ------------------------------------------------------------------------------

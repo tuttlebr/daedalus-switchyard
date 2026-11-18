@@ -1,0 +1,21 @@
+--- a/crates/libsy-llm-client/src/client.rs
++++ b/crates/libsy-llm-client/src/client.rs
+@@ -279,6 +279,18 @@
+             strip_unsigned_thinking_blocks(&mut body);
+         }
+         merge_extra_body(&mut body, backend.extra_body());
++        // A server-owned streaming target is an explicit transport policy,
++        // including for same-format callers that supplied stream=false.
++        // Auxiliary endpoints (token counting/compaction) cannot stream.
++        if endpoint.allows_streaming()
++            && backend.extra_body().get("stream") == Some(&Value::Bool(true))
++        {
++            body["stream"] = Value::Bool(true);
++        } else if !endpoint.allows_streaming() {
++            if let Some(object) = body.as_object_mut() {
++                object.remove("stream");
++            }
++        }
+         // After the merge on purpose: the effort override must win over both the caller's
+         // value and any `reasoning` default a target set through `extra_body`.
+         apply_reasoning_effort(&mut body, backend);

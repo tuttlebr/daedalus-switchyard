@@ -1,0 +1,714 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Baseten Responses",
+    "version": "1.0.0",
+    "description": "OpenAI Responses-compatible API for Baseten Model APIs. Requests are stateless: send the full conversation as `input` on every call."
+  },
+  "paths": {
+    "/v1/responses": {
+      "post": {
+        "summary": "Create a response",
+        "description": "Creates a model response from an input string or a list of input items. Requests are stateless: Baseten stores no response, so send prior turns back as input rather than referring to an earlier response.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "description": "Model slug, such as `zai-org/GLM-5.3`."
+                  },
+                  "input": {
+                    "description": "A prompt string, or the full conversation as input items. Include prior user messages, all response output items, and a function_call_output for each application function call.",
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "$ref": "#/components/schemas/InputMessage"
+                            },
+                            {
+                              "$ref": "#/components/schemas/ReasoningItem"
+                            },
+                            {
+                              "$ref": "#/components/schemas/FunctionCall"
+                            },
+                            {
+                              "$ref": "#/components/schemas/FunctionCallOutput"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  },
+                  "instructions": {
+                    "type": "string",
+                    "description": "System-level instructions for the request."
+                  },
+                  "max_output_tokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Upper bound on generated tokens, including reasoning tokens."
+                  },
+                  "temperature": {
+                    "type": "number",
+                    "format": "float",
+                    "default": 1,
+                    "minimum": 0,
+                    "maximum": 2,
+                    "description": "Sampling temperature, from 0 to 2."
+                  },
+                  "top_p": {
+                    "type": "number",
+                    "format": "float",
+                    "default": 1,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Nucleus sampling threshold, from 0 to 1."
+                  },
+                  "stream": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Stream server-sent events instead of returning one JSON object."
+                  },
+                  "tools": {
+                    "type": "array",
+                    "description": "Function tools the model can call.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "function"
+                          ]
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "parameters": {
+                          "type": "object",
+                          "description": "JSON Schema for the function arguments."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "name",
+                        "parameters"
+                      ]
+                    }
+                  },
+                  "tool_choice": {
+                    "description": "Whether the model calls a tool. `auto` lets the model decide, `required` forces a call, `none` forbids one.",
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "auto",
+                          "required",
+                          "none"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "function"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "name"
+                        ]
+                      }
+                    ]
+                  },
+                  "parallel_tool_calls": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Lets the model emit more than one function call in a response."
+                  },
+                  "text": {
+                    "type": "object",
+                    "description": "Output format for the message text.",
+                    "properties": {
+                      "format": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "text"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "json_schema"
+                                ]
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "schema": {
+                                "type": "object"
+                              },
+                              "strict": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "name",
+                              "schema"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "reasoning": {
+                    "type": "object",
+                    "description": "Reasoning settings for models that expose them.",
+                    "properties": {
+                      "effort": {
+                        "type": "string",
+                        "enum": [
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      }
+                    }
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "description": "Up to 16 key-value pairs, echoed back on the response.",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "truncation": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "disabled"
+                    ],
+                    "default": "disabled",
+                    "description": "`auto` or `disabled`."
+                  }
+                },
+                "required": [
+                  "model",
+                  "input"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A response, which can be completed, incomplete, or failed; or a server-sent event stream when stream is true. Inspect the outcome before using the output.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Response identifier, prefixed `resp_`."
+                    },
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "response"
+                      ]
+                    },
+                    "created_at": {
+                      "type": "integer"
+                    },
+                    "completed_at": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "completed",
+                        "incomplete",
+                        "failed",
+                        "in_progress"
+                      ]
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "output": {
+                      "type": "array",
+                      "description": "Output items in the order the model produced them.",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "message"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": "string",
+                                "enum": [
+                                  "assistant"
+                                ]
+                              },
+                              "content": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": [
+                                        "output_text"
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "annotations": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "text"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "role",
+                              "content"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "reasoning"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object"
+                                }
+                              },
+                              "content": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": [
+                                        "reasoning_text"
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "text"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "function_call"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "call_id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "arguments": {
+                                "type": "string",
+                                "description": "The function arguments, encoded as a JSON string."
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "call_id",
+                              "name",
+                              "arguments"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "usage": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "input_tokens": {
+                          "type": "integer"
+                        },
+                        "input_tokens_details": {
+                          "type": "object",
+                          "properties": {
+                            "cached_tokens": {
+                              "type": "integer"
+                            },
+                            "cache_write_tokens": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "output_tokens": {
+                          "type": "integer"
+                        },
+                        "output_tokens_details": {
+                          "type": "object",
+                          "properties": {
+                            "reasoning_tokens": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "total_tokens": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "incomplete_details": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "reason": {
+                          "type": "string",
+                          "description": "Why generation stopped early, such as `max_output_tokens`."
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    },
+                    "instructions": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "max_output_tokens": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "parallel_tool_calls": {
+                      "type": "boolean"
+                    },
+                    "temperature": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "top_p": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "tool_choice": {
+                      "type": "string"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "truncation": {
+                      "type": "string"
+                    },
+                    "service_tier": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "object"
+                    },
+                    "reasoning": {
+                      "type": "object",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "object",
+                    "created_at",
+                    "status",
+                    "model",
+                    "output"
+                  ]
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Server-sent events. Each event carries a `type`, a `sequence_number`, and a payload, starting with `response.created` and ending with `response.completed`, `response.incomplete`, or `response.failed`."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request was rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://inference.baseten.co",
+      "description": "Baseten Model APIs"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A Baseten API key."
+      }
+    },
+    "schemas": {
+      "InputMessage": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "developer"
+            ]
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "input_text",
+                        "output_text"
+                      ]
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ]
+                }
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ]
+      },
+      "ReasoningItem": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "reasoning"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "reasoning_text"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ]
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ]
+      },
+      "FunctionCall": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "function_call"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "string",
+            "description": "The function arguments, encoded as a JSON string."
+          }
+        },
+        "required": [
+          "type",
+          "call_id",
+          "name",
+          "arguments"
+        ]
+      },
+      "FunctionCallOutput": {
+        "type": "object",
+        "description": "The result of an application function call. Match call_id to the function_call item and encode the result as a string.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "function_call_output"
+            ]
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "call_id",
+          "output"
+        ]
+      }
+    }
+  }
+}

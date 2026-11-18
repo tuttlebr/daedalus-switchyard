@@ -37,9 +37,14 @@ def server(replies):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             captured.append((self.path, body))
             status, payload = replies[body["model"]]
-            data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+            streaming = status == 200
+            if streaming and not isinstance(payload, bytes):
+                payload = {"type": "response.completed", "response": payload}
+                data = ("data: " + json.dumps(payload) + "\n\n").encode()
+            else:
+                data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/event-stream" if streaming else "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("x-model-router-selected-model", "selected-upstream")
             self.end_headers()
@@ -89,7 +94,7 @@ class RouteSmokeTest(unittest.TestCase):
             self.assertEqual([body["model"] for _, body in captured], list(replies) * 2)
             for path, body in captured:
                 self.assertEqual(path, "/v1/responses")
-                self.assertFalse(body["stream"])
+                self.assertTrue(body["stream"])
                 self.assertEqual(body["max_output_tokens"], 512)
                 self.assertNotIn("reasoning", body)
 
@@ -123,6 +128,17 @@ class RouteSmokeTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Route test setup failed", result.stderr)
                 self.assertNotIn("Connecting", result.stdout)
+
+    def test_stream_errors_and_missing_completion_fail_after_http_200(self):
+        for wire in (b'data: {"type":"error","error":{"message":"failed"}}\n\n',
+                     b'data: {"type":"response.failed","response":{"status":"completed"}}\n\n',
+                     b'data: {"type":"response.output_text.delta","delta":"OK"}\n\n',
+                     b'data: [DONE]\n\n'):
+            self.write_routes(["broken"])
+            with server({"daedalus/broken": (200, wire)}) as (url, _):
+                result = self.run_command(["make", "test", str(self.routes), f"TEST_BASE_URL={url}"])
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("0 passed, 1 failed", result.stdout)
 
     def test_make_reports_missing_file_and_rejects_multiple_files(self):
         missing = self.directory_path / "missing.toml"

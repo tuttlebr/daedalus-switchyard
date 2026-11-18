@@ -172,11 +172,16 @@ Target `id` identifies a routing choice; `model` identifies the upstream model.
 fields take precedence, including reasoning effort. Responses requests are
 translated to Chat for Chat clients; native Responses clients use that transport.
 Preserve tool-call/result IDs, reasoning history and terminal stream handling.
-Leave `stream` unset on every target. A target-level default replaces the
-caller's choice whenever the request is translated between Chat and Responses,
-and forces streaming on callers that omit the field; only a same-format caller's
-explicit value survives it. Do not add Responses-only `truncation` to Chat target
-defaults.
+Every shipped generation target sets `extra_body.stream = true`. The
+`required-streaming.patch` makes this a transport policy: even a same-format
+caller sending `stream=false` receives SSE. Other `extra_body` fields remain
+caller-overridable defaults. Token-counting/compaction auxiliary endpoints remain
+buffered and omit `stream`; the decision classifier is a separate JSON API.
+Use streaming-capable clients. The Daedalus runtime streams direct model forwards
+and automation planning; the frontend folds planning SSE before validating a draft.
+Deploy that frontend before the runtime/gateway policy. Old clients that expect a
+single JSON completion must migrate to SSE. Do not add Responses-only `truncation`
+to Chat target defaults.
 
 Configured provider affinity headers are separate from request correlation and
 routing sessions. The gateway preserves standard `user` through Responses-to-Chat
@@ -244,7 +249,7 @@ SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
 Without the built binary, HTTP transport tests are skipped. Older algorithm
 fixtures test compatibility separately from the current deployment policy.
 `tests/test_responses_transport.py` discovers native Responses aliases and checks
-both streaming modes, target defaults, caller reasoning overrides and tool-result
+forced streaming, target defaults, caller reasoning overrides and tool-result
 IDs against a synthetic provider. It also checks native snapshot corrections;
 see [native Responses snapshots](docs/responses-native-snapshots.md). `tests/test_stream_contract.py` calls every
 route of every provider file through both Chat and Responses with streaming on,
@@ -263,7 +268,7 @@ python3 scripts/test_decision_judge.py routes_fireworks.toml \
   --base-url http://127.0.0.1:30090/v1 --output /tmp/decision-routing-probe.json
 ```
 
-These are real model requests. Route smoke sends one non-streaming Responses
+These are real model requests. Route smoke sends one streaming Responses
 request per configured alias, asks for `OK`, and defaults to 4096 output tokens
 and 120 seconds per route. A pass needs completed, nonempty text; it is not a
 quality benchmark. `TEST_TIMEOUT` and `TEST_MAX_OUTPUT_TOKENS` bound each request.
