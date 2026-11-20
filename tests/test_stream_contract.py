@@ -80,7 +80,7 @@ def responses_reply(body):
 @unittest.skipUnless(BINARY, "set SWITCHYARD_TEST_BINARY to the built binary")
 class StreamContractTest(unittest.TestCase):
     @contextmanager
-    def gateway(self, path):
+    def gateway(self, path, *, chat_provider=False):
         state = {"captured": [], "abort": False}
         config = tomllib.loads(compose_source(path))
         choices = list(config["routes"]["stage"]["classifier"]["choices"])
@@ -108,7 +108,11 @@ class StreamContractTest(unittest.TestCase):
                 else:
                     state["captured"].append((self.path, body))
                     reply = chat_reply if self.path.endswith("/chat/completions") else responses_reply
-                    content_type, raw = reply(body)
+                    if "chat_frames" in state:
+                        content_type = "text/event-stream"
+                        raw = sse(state["chat_frames"]) + "data: [DONE]\n\n"
+                    else:
+                        content_type, raw = reply(body)
                     if state["abort"]:
                         # One complete event, then drop the connection without
                         # the terminating chunk.
@@ -137,6 +141,8 @@ class StreamContractTest(unittest.TestCase):
         try:
             base = f"http://127.0.0.1:{upstream.server_port}/v1"
             source = compose_source(path)
+            if chat_provider:
+                source = source.replace('format = "openai_responses"', 'format = "openai_chat"')
             environment = {"PATH": os.environ.get("PATH", "")}
             for client in config["llm_clients"].values():
                 source = source.replace(client["base_url"], base)
@@ -221,6 +227,53 @@ class StreamContractTest(unittest.TestCase):
                                 self.assertIn("OK", raw)
                                 exercised += 1
         self.assertGreater(exercised, 0, "No provider routes discovered")
+
+    def test_chat_tool_deltas_need_a_finish_for_their_own_choice(self):
+        def frame(index, delta, finish=None):
+            return {"id": "chatcmpl-fixture", "object": "chat.completion.chunk",
+                    "model": "fixture", "choices": [
+                        {"index": index, "delta": delta, "finish_reason": finish}]}
+
+        function = {"name": "lookup", "arguments": "{}"}
+        call_delta = frame(0, {"tool_calls": [{"index": 0, "id": "call_1", "function": function}]})
+        usage = {"id": "chatcmpl-fixture", "model": "fixture", "choices": [], "usage": USAGE}
+        cases = [
+            ("provisional", [call_delta, usage], "error"),
+            ("other choice finished", [call_delta, frame(1, {}, "stop")], "error"),
+            ("legacy provisional", [frame(0, {"function_call": function})], "error"),
+            ("valid tool", [call_delta, frame(0, {}, "tool_calls"), usage], "tool_calls"),
+            ("compatible stop", [call_delta, frame(0, {}, "stop"), usage], "stop"),
+            ("text and sentinel", [frame(0, {"content": "partial text"})], "stop"),
+            ("length", [call_delta, frame(0, {}, "length"), usage], "length"),
+            ("filter", [call_delta, frame(0, {}, "content_filter"), usage], "content_filter"),
+        ]
+        with self.gateway(ROOT / "routes_openai.toml", chat_provider=True) as (call, state, _):
+            for case, frames, expected in cases:
+                state["chat_frames"] = frames
+                for api in ("chat", "responses"):
+                    with self.subTest(case=case, api=api):
+                        _, raw = call("daedalus/low", api, True)
+                        self.assertEqual(len(state["captured"]), 1)
+                        self.assertEqual(state["captured"][0][0], "/v1/chat/completions")
+                        events = [json.loads(line[6:]) for line in raw.splitlines()
+                                  if line.startswith("data: {")]
+                        if expected == "error":
+                            self.assertIn("terminal event", events[-1]["error"]["message"])
+                            self.assertNotIn("data: [DONE]", raw)
+                            self.assertNotIn("response.completed", raw)
+                        elif api == "chat":
+                            self.assertIn("data: [DONE]", raw)
+                            finishes = [c["finish_reason"] for e in events for c in e["choices"]
+                                        if c.get("finish_reason")]
+                            self.assertEqual(finishes, [expected])
+                        elif expected in ("content_filter", "length"):
+                            self.assertEqual(events[-1]["type"], "response.incomplete")
+                            response = events[-1]["response"]
+                            reason = "max_output_tokens" if expected == "length" else expected
+                            self.assertEqual(response["incomplete_details"]["reason"], reason)
+                            self.assertEqual(response["output"][0]["status"], "incomplete")
+                        else:
+                            self.assertEqual(events[-1]["type"], "response.completed")
 
     def test_midstream_upstream_abort_is_a_terminal_transport_error(self):
         # Consumers retry on this exact envelope; other gateway failures keep

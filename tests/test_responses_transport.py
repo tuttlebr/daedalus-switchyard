@@ -23,7 +23,7 @@ BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
 @unittest.skipUnless(BINARY, "set SWITCHYARD_TEST_BINARY to the built binary")
 class ResponsesTransportTest(unittest.TestCase):
     @contextmanager
-    def gateway(self, path, stream_events=None):
+    def gateway(self, path, stream_events=None, stream_tail=b""):
         captured = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -61,7 +61,7 @@ class ResponsesTransportTest(unittest.TestCase):
                     raw = "".join(
                         f'event: {event["type"]}\ndata: {json.dumps(event)}\n\n'
                         for event in events
-                    ).encode()
+                    ).encode() + stream_tail
                     content_type = "text/event-stream"
                 else:
                     raw = json.dumps(response).encode()
@@ -190,6 +190,41 @@ class ResponsesTransportTest(unittest.TestCase):
                                 self.assertEqual(body["max_output_tokens"], 32)
                                 exercised += 1
         self.assertGreater(exercised, 0, "No native Responses aliases discovered")
+
+    def test_done_marker_after_partial_responses_is_an_error(self):
+        text_events = [{"type": "response.output_text.delta", "output_index": 0,
+                        "content_index": 0, "delta": "partial text"}]
+        tool_events = [
+            {"type": "response.output_item.added", "output_index": 0, "item": {
+                "type": "function_call", "call_id": "call_partial", "name": "lookup",
+                "id": "fc_partial", "arguments": ""}},
+            {"type": "response.function_call_arguments.delta", "output_index": 0,
+             "item_id": "fc_partial", "delta": '{"term":"partial argument'},
+        ]
+        for events, partial in [(text_events, "partial text"), (tool_events, "partial argument")]:
+            for tail in (b"data: [DONE]\n\n", b"data: [DONE]"):
+                with self.gateway(ROOT / "routes_openai.toml", events, tail) as fixture:
+                    url, captured, _, opener = fixture
+                    for endpoint, key, value in [
+                        ("responses", "input", "fixture"),
+                        ("chat/completions", "messages", [{"role": "user", "content": "fixture"}]),
+                    ]:
+                        with self.subTest(endpoint=endpoint, partial=partial, tail=tail):
+                            captured.clear()
+                            request = Request(url + "/v1/" + endpoint, headers={
+                                "Content-Type": "application/json",
+                            }, data=json.dumps({
+                                "model": "daedalus/low", "stream": True, key: value,
+                            }).encode())
+                            with opener.open(request, timeout=5) as reply:
+                                wire = reply.read().decode()
+                            self.assertEqual(len(captured), 1)
+                            self.assertIn(partial, wire)
+                            self.assertNotIn("data: [DONE]", wire)
+                            self.assertNotIn("response.completed", wire)
+                            frames = [json.loads(line[6:]) for line in wire.splitlines()
+                                      if line.startswith("data: {")]
+                            self.assertIn("terminal event", frames[-1]["error"]["message"])
 
     def test_native_snapshots_can_replace_provisional_text(self):
         item = {"id": "msg_fixture", "type": "message", "role": "assistant",

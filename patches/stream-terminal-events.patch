@@ -1,0 +1,124 @@
+--- a/crates/switchyard-translation/src/helpers.rs
++++ b/crates/switchyard-translation/src/helpers.rs
+@@ -283,8 +283,9 @@
+                 frame.clear();
+                 match parsed {
+                     sse::SseFrame::Empty => {}
++                    // Responses and Anthropic require a typed terminal event.
+                     sse::SseFrame::Done => {
+-                        saw_terminal |= source != WireFormat::AnthropicMessages;
++                        saw_terminal |= source == WireFormat::OpenAiChat;
+                         break;
+                     }
+                     sse::SseFrame::Data(value) => {
+@@ -316,7 +317,7 @@
+                 .map_err(|error| LlmClientError::ResponseTranslation(error.to_string()))?;
+             match parsed {
+                 sse::SseFrame::Done => {
+-                    saw_terminal |= source != WireFormat::AnthropicMessages;
++                    saw_terminal |= source == WireFormat::OpenAiChat;
+                 }
+                 sse::SseFrame::Data(value) => {
+                     saw_terminal |= sse::is_terminal_event(source, &value);
+@@ -332,7 +333,7 @@
+             }
+         }
+ 
+-        if !saw_terminal && !saw_error {
++        if (!saw_terminal || !state.unfinished_chat_tool_choices.is_empty()) && !saw_error {
+             Err(LlmClientError::ResponseTranslation(format!(
+                 "{source} stream ended before a terminal event"
+             )))?;
+--- a/crates/switchyard-translation/src/codecs/stream.rs
++++ b/crates/switchyard-translation/src/codecs/stream.rs
+@@ -54,6 +54,10 @@
+     pub(crate) tool_states: BTreeMap<usize, StreamToolState>,
+     #[serde(default)]
+     pub(crate) pending_chat_tool_names: BTreeMap<usize, String>,
++    /// Text-only Chat streams can use a bare [DONE]. Tool deltas need an explicit
++    /// finish for their own choice before a caller can act on the arguments.
++    #[serde(default)]
++    pub(crate) unfinished_chat_tool_choices: std::collections::BTreeSet<u64>,
+     #[serde(default)]
+     pub(crate) active_anthropic_tool: Option<usize>,
+     #[serde(default)]
+--- a/crates/switchyard-translation/src/codecs/openai_chat/stream.rs
++++ b/crates/switchyard-translation/src/codecs/openai_chat/stream.rs
+@@ -100,7 +100,16 @@
+         let Some(choice) = choice.as_object() else {
+             continue;
+         };
++        let choice_index = choice.get("index").and_then(Value::as_u64).unwrap_or(0);
+         if let Some(delta) = choice.get("delta").and_then(Value::as_object) {
++            if delta
++                .get("function_call")
++                .and_then(Value::as_object)
++                .and_then(|f| first_nonempty_string(f, &["name", "arguments"]))
++                .is_some()
++            {
++                state.unfinished_chat_tool_choices.insert(choice_index);
++            }
+             if let Some(details) = delta
+                 .get("reasoning_details")
+                 .and_then(Value::as_array)
+@@ -158,6 +167,12 @@
+                             .and_then(|function| function.get("arguments"))
+                             .and_then(Value::as_str)
+                             .map(ToOwned::to_owned);
++                        // Providers may send empty fragments after a legitimate finish.
++                        if first_nonempty_string(tool_call, &["id"]).is_some()
++                            || function.and_then(|f| first_nonempty_string(f, &["name", "arguments"])).is_some()
++                        {
++                            state.unfinished_chat_tool_choices.insert(choice_index);
++                        }
+                         out.push(LlmResponseChunk::ToolCallDelta {
+                             index,
+                             id: tool_call
+@@ -173,6 +188,12 @@
+             }
+         }
+         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
++            if matches!(
++                reason,
++                "stop" | "tool_calls" | "function_call" | "length" | "content_filter"
++            ) {
++                state.unfinished_chat_tool_choices.remove(&choice_index);
++            }
+             for (index, name) in std::mem::take(&mut state.pending_chat_tool_names) {
+                 out.push(LlmResponseChunk::ToolCallDelta {
+                     index,
+--- a/crates/switchyard-translation/src/codecs/responses/stream.rs
++++ b/crates/switchyard-translation/src/codecs/responses/stream.rs
+@@ -415,16 +415,17 @@
+     if state.finished {
+         return Vec::new();
+     }
+-    let is_truncated = matches!(
+-        state.stop_reason.as_deref(),
+-        Some("length") | Some("max_tokens")
+-    );
+-    let (event_type, status) = if is_truncated {
++    let incomplete_reason = match state.stop_reason.as_deref() {
++        Some("length" | "max_tokens") => Some("max_output_tokens"),
++        Some("content_filter") => Some("content_filter"),
++        _ => None,
++    };
++    let (event_type, status) = if incomplete_reason.is_some() {
+         ("response.incomplete", "incomplete")
+     } else {
+         ("response.completed", "completed")
+     };
+-    let incomplete_details = is_truncated.then(|| json!({ "reason": "max_output_tokens" }));
++    let incomplete_details = incomplete_reason.map(|reason| json!({ "reason": reason }));
+     let mut out = ensure_responses_created(state);
+     if state.response_text_started
+         && let Some(output_index) = state.response_text_output_index
+@@ -548,7 +549,7 @@
+             "call_id": tool.id.clone().unwrap_or_else(|| format!("call_{output_index}")),
+             "name": tool.name.clone().unwrap_or_default(),
+             "arguments": tool.arguments,
+-            "status": "completed",
++            "status": status,
+         });
+         out.push(json!({
+             "type": "response.output_item.done",
