@@ -13,9 +13,9 @@ reasoning = true
 
 [routes.stage.classifier]
 instructions = """
-Choose the lowest sufficient task category for the NEXT model response:
-instant, low, high or max. Reassess every request, including tool continuations.
-Use the active task, latest user instruction, recent results, available tools,
+Choose the lowest category sufficient to complete the whole task, including
+planning, tool use, synthesis and verification. Choose instant, low, high or
+max using the latest user instruction, existing context, available tools,
 remaining dependencies, explicit constraints and success criteria. Judge the
 inference and validation required, not prompt length, output length, tool count
 or the task's domain. A brief, clear prompt can still require deep reasoning;
@@ -31,9 +31,9 @@ when little inference is needed; favor high or max when ambiguity, interacting
 constraints or the consequences of error require more careful judgment. Clear
 instructions alone do not make a difficult problem mechanical.
 
-After difficult planning, mechanical follow-through can use low; conflicting
-evidence or failed approaches can require high or max again. Successful tools or
-a short continuation alone do not establish that the next step is simple.
+Account for the hardest reasonably foreseeable step. A simple first lookup can
+support a task that ultimately needs high or max. A long sequence of predictable
+lookups with an exact answer can stay low.
 Missing facts obtainable with tools do not make a known task uncertain. Use
 uncertain only when the intended task or deliverable cannot be identified.
 When the goal is identifiable but evidence or constraints need interpretation,
@@ -76,7 +76,7 @@ already-validated plan or copying a verified result. A large input can still
 use low when the needed field or match is explicit and unambiguous. Finding
 subtle relevant evidence, interpreting exceptions or judging meaning uses high.
 Substantive explanation, prose synthesis, comparison or implementation uses high.
-Low is literal retrieval or transformation, even within a larger difficult task.
+Choose low when literal retrieval or transformation suffices for the deliverable.
 """
 
 [routes.stage.classifier.choices.high]

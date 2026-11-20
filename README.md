@@ -147,13 +147,15 @@ the local `include` directive: direct server or Helm use requires the rendered
 file. Route smoke tests, judge probes, and API-key discovery also understand
 composed profiles. No additional Python package or server image change is needed.
 
-The chart's embedded `config.routesToml` is an older GLM classifier example.
+The chart's embedded `config.routesToml` is an older GLM example with the
+upstream classifier's `user_turn` trigger. The standalone profiles below
+also support the Daedalus run identity and serving-target handoff.
 Direct Helm use must supply `--set-file config.routesToml=<rendered provider file>`
 and the corresponding `apiKeySecret.keys`, just as the deployment script does.
 
 ### Classification and public aliases
 
-Automatic `daedalus` routing classifies the next response into four categories:
+Automatic `daedalus` routing selects one of four categories for the whole task.
 
 | Category | Work requirements |
 | --- | --- |
@@ -169,11 +171,11 @@ classifier categories. Existing passthrough aliases bypass classification.
 Public `none` is retired; a provider-native value with that spelling would be a
 separate wire setting, not an alias.
 
-Every automatic request is classified again, including tool continuations.
-Uncertain, below-gate, timeout and invalid decisions use the selected file's
-`default_target`; it need not share a classifier category's name. Provider failure
-tries that default only when it differs from the selected target. There is no
-retained effort floor or general cross-provider failover.
+Tool continuations reuse the selected target and skip classification. Uncertain,
+below-gate, timed-out and invalid decisions select the profile's `default_target`.
+A provider failure before output can try that default when it differs from the
+selection. The agent carries the target that actually served the response into
+the next automatic round. [Routing lifecycle](docs/standalone-decision-routing.md)
 
 Classifier policy and provider target definitions are configured separately.
 Provider-specific native effort may

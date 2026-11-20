@@ -84,17 +84,20 @@ config:
     api_key_env = "FIREWORKS_API_KEY"
 
     [targets.xhigh]
-    id = "accounts/fireworks/routers/glm-5p2-fast-us"
+    id = "xhigh"
+    model = "accounts/fireworks/routers/glm-5p2-fast-us"
     llm_client = "fireworks_xhigh"
     extra_body = { reasoning = { effort = "xhigh" } }
 
     [targets.low]
-    id = "accounts/fireworks/routers/glm-5p2-fast-us"
+    id = "low"
+    model = "accounts/fireworks/routers/glm-5p2-fast-us"
     llm_client = "fireworks_low"
     extra_body = { reasoning = { effort = "low" } }
 
     [targets.classifier]
-    id = "accounts/fireworks/routers/glm-5p2-fast-us"
+    id = "classifier"
+    model = "accounts/fireworks/routers/glm-5p2-fast-us"
     llm_client = "fireworks_classifier"
 
     [routes.stage]
@@ -106,6 +109,7 @@ config:
     weak_target = "low"
     base_threshold = 0.5
     threshold_step = 0.1
+    classify_trigger = "user_turn"
     recent_turn_window = 3
     tool_calling = true
     reasoning = false

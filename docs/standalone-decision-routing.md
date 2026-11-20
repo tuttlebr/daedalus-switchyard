@@ -1,19 +1,42 @@
 # Standalone decision routing
 
 Provider files discovered through `routes_*.toml` use the standalone native
-`decision_api` route for `daedalus`, with `classify_trigger = "every_request"`.
+`decision_api` route for `daedalus`, with `classify_trigger = "user_turn"`.
 The target categories are max, high, low and instant; `default_target`, explicit
 aliases and native provider settings are defined independently in each file.
 Select a provider explicitly for validation, probing and deployment. The `stage`
 table name remains for tooling; no `[routes.stage.stage]` is needed.
 
-The decision model judges the next response from the task and latest tool
-context. Each automatic request, including a tool continuation in the same
-session, can choose a different profile. There is no retained effort floor or
-stage recovery hold. Context guards, invalid/uncertain decisions, rejected
-probability gates and service failures choose the default for this request only.
-The next request runs classification again. Provider failure tries only the
-default after the selected target. Explicit profile aliases bypass classification.
+The decision model judges the whole task once. A Daedalus run keeps its target
+through tool calls, steering, retries and final synthesis. The next run gets a
+fresh choice, including in the same conversation. An uncertain decision, a
+rejected score or an unavailable judge selects the configured default for the
+run. Explicit profile aliases bypass classification.
+
+The agent sends an opaque `x-switchyard-task-id` for the run. It reads
+`x-model-router-selected-model` from the gateway response headers, so even
+a stream interrupted before completion can carry its serving target into a
+retry. If that header is unavailable, a completed response's model metadata
+also supplies the target. The agent sends the target as
+`x-switchyard-previous-target` on the next automatic call. The gateway checks it against the
+current route's configured choices and default. This lets another replica
+on the same profile continue the run without a judge call. Changing a target's
+provider or model in a later configuration changes where that target goes.
+The agent's per-attempt correlation ID
+remains distinct. Provider session affinity is configured on the provider client.
+
+Direct API clients can use a fresh task ID for each independent task and reuse
+it for retries and tool calls. A session ID plus a stable turn ID or replayed
+history also identifies a user turn. A client can carry the serving target from
+the preceding response to continue across replicas. The per-route assignment
+table is bounded and local to each gateway process. A request without an
+acknowledged target or a recognizable task is classified normally. Restart or
+eviction can require a new decision when a client relies solely on that table.
+
+If a target fails before output, the existing provider fallback can try
+`default_target` once it exhausts that target's configured retries. A successful
+fallback becomes the serving target for subsequent calls. Errors after output
+begins follow the existing stream and partial-result handling.
 
 Change category criteria and probability gates in
 `config/routing/four-category.toml`, decision endpoint/budget settings in
@@ -24,8 +47,8 @@ a shallow merge; omit those overrides when measuring the configured mapping.
 
 The decision server is a separately provisioned dependency. The gateway discovers
 its model, prepares the classifier request and uses its scores; it does not
-install or train that model. A healthy gateway can still fall back on every
-automatic request if discovery, tokenization or classification fails.
+install or train that model. A healthy gateway can still select the default
+for new tasks if discovery, tokenization or classification fails.
 
 Routing does not provide a local-processing or privacy boundary.
 The judge receives the opening task, latest user instruction and six recent
@@ -38,8 +61,11 @@ separately from accepted judge choices.
 
 `patches/decision-api-standalone.patch` extends the pinned runner. The Dockerfile
 applies it after the existing native classifier, metadata and discovery patches,
-runs the native Rust contract tests and builds the server. Legacy Composite
-configurations remain supported; they still reject `every_request`.
+runs the native Rust contract tests and builds the server. The task-retention
+patch adds the `user_turn` lifecycle. An explicitly configured standalone
+`every_request` route preserves per-request decisions. Native Switchyard
+documents the `every_request`, `user_turn` and `new_session` triggers for
+its generic classifier. [Upstream trigger semantics](https://github.com/NVIDIA-NeMo/Switchyard/blob/336196f6fbfc97ddc71c1700f6092e564e9f23c2/docs/routing_algorithms/llm_classifier_routing.md#when-the-judge-runs)
 
 The built gateway can be tested entirely against local HTTP fixtures:
 
@@ -50,11 +76,9 @@ SWITCHYARD_TEST_BINARY=/path/to/switchyard-server \
   python3 -m unittest discover -s tests -p test_fireworks_chat_transport.py -v
 ```
 
-The standalone cases cover fresh decisions across tool calls (`xhigh → low →
-high → low`), both Chat Completions and Responses, unknown sessions, streaming,
-probability gates, timeout/invalid-decision recovery, provider fallback and
-explicit profile bypass. These are deterministic contract tests, not model
-quality calibration.
+The local cases exercise task retention and reset, legacy per-request routing,
+Chat Completions and Responses, streaming, probability gates, classifier errors,
+provider fallback and explicit profile bypass.
 
 ## Check a routing change
 

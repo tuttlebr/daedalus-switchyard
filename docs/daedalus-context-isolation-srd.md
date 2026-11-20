@@ -7,9 +7,8 @@
 **Integration dependency:** Switchyard routing and provider transport
 
 **Status:** unimplemented proposal, not a description of a supported privacy
-boundary. The current provider files use standalone per-request classification
-with `max`, `high`, `low` and `instant`; they do not expose the historical local
-aliases or retain a task-effort floor. Here, “context isolation” means a proposed
+boundary. The current provider files select a target for an automatic task using
+`max`, `high`, `low` or `instant`. Here, “context isolation” means a proposed
 agent enforcement mechanism. It is distinct from the `daedalus-context`
 repository, which owns ingestion, retrieval, embedding/reranking and MCP services.
 
@@ -28,7 +27,7 @@ The daily-summary skill combines personal-source reads, public research, editori
 The current implementation creates several obstacles:
 
 1. The agent builds model requests from a shared history using `request.chat_history = history.clone()` in `builder/runtime/src/agent.rs`. Changing the model carries earlier private messages and tool results to the new destination.
-2. Switchyard's automatic route classifies each request and tool continuation independently. It has no retained task-effort floor. Classification can change capability preferences, but it does not isolate context or restrict outbound destinations.
+2. Switchyard's automatic route selects a capability target and retains it through tool continuations. Context isolation and outbound destination restrictions require separate enforcement.
 3. The Daedalus workflow leaves effort selection to the automatic `daedalus` route when `model_profile` is omitted. Explicit canonical effort levels remain fixed; retired `default`, `deep`, `deep_max`, and `none` profiles are rejected. Task routing must preserve that explicit intent.
 4. The skill reads Gmail, Calendar, and potentially personal health memory early. A public-news step later in the same history can still contain private information.
 5. Standalone fallback uses the selected route's `default_target`; current provider files expose no local destination contract. Historical Composite configurations can move a local selection to a cloud target. Neither behavior implements the destination restrictions proposed here.

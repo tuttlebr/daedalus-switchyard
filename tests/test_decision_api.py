@@ -15,6 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -38,7 +39,7 @@ class ProbeSchemaTest(unittest.TestCase):
             with self.subTest(profile=path.name), patch("sys.argv", ["probe", str(path)]), patch.object(probe, "probe", return_value=[]) as run:
                 self.assertEqual(probe.main(), 0)
                 self.assertEqual(run.call_args.args[2], load_config(path)["routes"]["stage"]["default_target"])
-                self.assertEqual(run.call_args.args[0]["classify_trigger"], "every_request")
+                self.assertEqual(run.call_args.args[0]["classify_trigger"], "user_turn")
 
     def test_optional_metadata_and_clef_response(self):
         answer = verdict()["answers"]["effort"]
@@ -61,8 +62,8 @@ class ProbeSchemaTest(unittest.TestCase):
 @unittest.skipUnless(BINARY, "set SWITCHYARD_TEST_BINARY to the built binary")
 class DecisionGatewayTest(unittest.TestCase):
     @contextmanager
-    def gateway(self, response=None, model="baselabs/elephant-1", timeout_ms=2000, base_suffix="/v1", standalone=False, truncate=False):
-        state = {"response": response or verdict(), "judges": [], "providers": [],
+    def gateway(self, response=None, model="baselabs/elephant-1", timeout_ms=2000, base_suffix="/v1", standalone=False, truncate=False, trigger=None, forward_auth=False):
+        state = {"response": response or verdict(), "judges": [], "providers": [], "provider_headers": [],
                  "models": [{"id": "baselabs/elephant-1", "max_model_len": 4096}], "discoveries": [],
                  "discovery_status": 200, "discovery_delay": 0, "judge_delay": 0,
                  "provider_status": {}, "tokenizations": [], "tokenizer_status": 200,
@@ -115,6 +116,7 @@ class DecisionGatewayTest(unittest.TestCase):
                         result = {**result, "usage": {"input_tokens": count + state["usage_offset"], "output_tokens": 0}}
                 else:
                     state["providers"].append(body)
+                    state["provider_headers"].append({k.lower(): v for k, v in self.headers.items()})
                     status = state["provider_status"].get(body["model"], 200)
                     result = {
                         "id": "chatcmpl-fixture", "object": "chat.completion", "created": 0,
@@ -144,6 +146,7 @@ class DecisionGatewayTest(unittest.TestCase):
 format = "openai_chat"
 base_url = "http://127.0.0.1:{upstream.server_port}/v1"
 max_retries = 0
+forward_auth = {str(forward_auth).lower()}
 '''
                 for target in ("low", "high", "xhigh", "max"):
                     source += f'''
@@ -165,7 +168,7 @@ base_url = "http://127.0.0.1:{upstream.server_port}{base_suffix}"
 timeout_ms = {timeout_ms}
 {'max_input_tokens = "auto"' if truncate else ''}
 {'truncate_input = true' if truncate else ''}
-classify_trigger = "{'every_request' if standalone else 'user_turn'}"
+classify_trigger = "{trigger or ('every_request' if standalone else 'user_turn')}"
 instructions = "Choose sufficient effort for the whole task."
 uncertain_criteria = "Cannot identify the task."
 '''
@@ -219,12 +222,12 @@ target = "low"
             upstream.server_close()
             thread.join(timeout=5)
 
-    def request(self, url, session="fixture", model="daedalus", messages=None, endpoint="chat/completions"):
+    def request(self, url, session="fixture", model="daedalus", messages=None, endpoint="chat/completions", headers=None):
         messages = messages or [{"role": "user", "content": "What is 7 + 9?"}]
         body = {"model": model, "stream": False,
                 "input" if endpoint == "responses" else "messages": messages}
         req = Request(url + "/v1/" + endpoint, data=json.dumps(body).encode(),
-                      headers={"Content-Type": "application/json", "x-switchyard-session-id": session})
+                      headers={"Content-Type": "application/json", "x-switchyard-session-id": session, **(headers or {})})
         with urlopen(req, timeout=5) as response:
             result = json.load(response)
             if endpoint == "responses":
@@ -379,6 +382,116 @@ target = "low"
                 {"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function",
                  "function": {"name": "check", "arguments": "{}"}}]},
                 {"role": "tool", "tool_call_id": "call-1", "content": result}]
+
+    def test_task_selection_survives_continuations_and_distinguishes_branches(self):
+        for endpoint in ("chat/completions", "responses"):
+            with self.subTest(endpoint=endpoint), self.gateway(standalone=True, trigger="user_turn") as (url, state):
+                history = self.continuation(endpoint)
+
+                def select(messages, **kwargs):
+                    return self.request(url, endpoint=endpoint, messages=messages, **kwargs)
+
+                self.choose(state, "low")
+                self.assertEqual(select(history[:1]), "low")
+                self.choose(state, "high")
+                self.assertEqual(select(history), "low")
+                self.assertEqual(len(state["judges"]), 1)
+                new_turn = {"role": "user", "content": "Continue the work."}
+                self.assertEqual(select(history + [new_turn]), "high")
+                self.choose(state, "max")
+                other_branch = self.continuation(endpoint, result="Different evidence")
+                self.assertEqual(select(other_branch + [new_turn]), "max")
+                next_tool = self.continuation(endpoint, result="Latest result")[1:]
+                self.assertEqual(select(history + [new_turn] + next_tool), "high")
+                self.assertEqual(select(other_branch + [new_turn] + next_tool), "max")
+                self.assertEqual(select(history), "low")
+                self.assertEqual(len(state["judges"]), 3)
+                self.assertEqual(select(history, session=""), "max")
+                self.choose(state, "high")
+                self.assertEqual(select(history, session=""), "high")
+                self.assertEqual(len(state["judges"]), 5)
+
+    def test_session_only_new_identical_user_task_classifies_again(self):
+        with self.gateway(standalone=True, trigger="user_turn") as (url, state):
+            history = self.continuation("chat/completions")
+            self.assertEqual(self.request(url, messages=history[:1]), "low")
+            self.choose(state, "high")
+            self.assertEqual(self.request(url, messages=history), "low")
+            self.assertEqual(self.request(url, messages=history[:1]), "high")
+            self.assertEqual(self.request(url, messages=history), "high")
+            self.assertEqual(len(state["judges"]), 2)
+
+    def test_standalone_concurrent_task_firsts_share_one_judge_and_keep_served_fallback(self):
+        with self.gateway(standalone=True, trigger="user_turn") as (url, state):
+            state["judge_delay"] = 0.15
+            headers = {"x-switchyard-task-id": "one"}
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                selected = list(pool.map(lambda _: self.request(url, headers=headers), range(6)))
+            self.assertEqual(selected, ["low"] * 6)
+            self.assertEqual(len(state["judges"]), 1)
+            state["provider_status"]["fixture-low"] = 503
+            self.assertEqual(self.request(url, headers=headers), "max")
+            self.assertEqual([p["model"] for p in state["providers"][-2:]], ["fixture-low", "fixture-max"])
+            state["provider_status"].clear()
+            self.assertEqual(self.request(url, headers=headers), "max")
+            self.assertEqual(self.request(url, session="new-caller", headers=headers), "low")
+            self.assertEqual(len(state["judges"]), 2)
+            # An acknowledged response can reconstruct the route on another gateway replica.
+            acknowledged = {"x-switchyard-task-id": "other", "x-switchyard-previous-target": "high"}
+            self.assertEqual(self.request(url, headers=acknowledged), "high")
+            self.assertEqual(self.request(url, headers={"x-switchyard-task-id": "other"}), "high")
+            self.assertEqual(len(state["judges"]), 2)
+            invalid = {"x-switchyard-task-id": "fresh", "x-switchyard-previous-target": "unknown"}
+            self.assertEqual(self.request(url, headers=invalid), "low")
+            self.assertEqual(len(state["judges"]), 3)
+
+    def test_stale_branch_cannot_displace_a_served_fallback(self):
+        for endpoint in ("responses", "chat/completions"):
+            with self.subTest(endpoint=endpoint), self.gateway(standalone=True, trigger="user_turn") as (url, state):
+                def send(task, previous=None):
+                    headers = {"x-switchyard-task-id": task}
+                    if previous is not None:
+                        headers["x-switchyard-previous-target"] = previous
+                    return self.request(url, endpoint=endpoint, headers=headers)
+
+                self.assertEqual(send("local"), "low")
+                state["provider_status"]["fixture-low"] = 503
+                self.assertEqual(send("local", "low"), "max")
+                state["provider_status"].clear()
+                self.assertEqual(send("local", "low"), "max")
+                self.assertEqual(send("local"), "max")
+                self.assertEqual([b["model"] for b in state["providers"]],
+                                 ["fixture-low", "fixture-low", "fixture-max", "fixture-max", "fixture-max"])
+                self.assertEqual(len(state["judges"]), 1)
+
+                # A warm worker learns an acknowledged fallback from a different replica.
+                self.assertEqual(send("remote"), "low")
+                self.assertEqual(send("remote", "max"), "max")
+                self.assertEqual(send("remote", "low"), "max")
+                # A cold worker also honors the first carried serving receipt.
+                self.assertEqual(send("cold", "max"), "max")
+                self.assertEqual(send("cold", "low"), "max")
+                self.assertEqual(len(state["judges"]), 2)
+                # A merely classified default can still be superseded by the actual receipt.
+                self.choose(state, "max")
+                self.assertEqual(send("unconfirmed"), "max")
+                self.assertEqual(send("unconfirmed", "low"), "low")
+                self.assertEqual(send("unconfirmed"), "low")
+                self.assertEqual(len(state["judges"]), 3)
+
+    def test_task_headers_stay_local_with_forwarded_provider_auth(self):
+        with self.gateway(standalone=True, trigger="user_turn", forward_auth=True) as (url, state):
+            headers = {
+                "authorization": "Bearer fixture-credential",
+                "x-switchyard-task-id": "opaque-fixture-task",
+                "x-switchyard-previous-target": "low",
+            }
+            self.assertEqual(self.request(url, headers=headers), "low")
+            self.assertEqual(len(state["judges"]), 0)
+            [upstream] = state["provider_headers"]
+            self.assertEqual(upstream["authorization"], headers["authorization"])
+            self.assertNotIn("x-switchyard-task-id", upstream)
+            self.assertNotIn("x-switchyard-previous-target", upstream)
 
     def test_standalone_rejudges_tools_down_and_up_on_both_apis(self):
         for endpoint in ("chat/completions", "responses"):

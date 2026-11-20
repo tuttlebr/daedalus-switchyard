@@ -1344,7 +1344,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                     self.assertIn(error.exception.code, (400, 404))
                 self.assertTrue(captured.empty())
 
-    def test_standalone_uses_real_profile_and_rejudges_streaming_tool_continuations(self):
+    def test_standalone_uses_real_profile_and_reuses_decision_for_streaming_tool_continuations(self):
         with self.router(
             composite="standalone", verdict=self.target_verdict("low", standalone=True), decision_auth=True
         ) as (url, captured, config):
@@ -1352,17 +1352,20 @@ class FireworksChatTransportTest(unittest.TestCase):
             self.assertEqual(route["type"], "decision_api")
             self.assertEqual(route["default_target"], "high")
             self.assertNotIn("stage", route)
+            session = {"x-switchyard-session-id": "standalone-fixture"}
+            self.request(url, input=self.continuation()[:1], headers=session)
+            path, judge, native_headers = captured.get(timeout=5)
+            self.assertEqual(path, "/v1/systemone")
+            self.assertIn("whole task", judge["questions"]["effort"]["instructions"])
+            self.assertIn("authorization", {k.lower() for k in native_headers})
+            captured.get(timeout=5)  # first answer
             for stream in (False, True):
                 for critical in (False, True):
                     headers = self.request(
                         url, input=self.continuation(output="out of memory" if critical else "checks passed"), stream=stream,
-                        headers={"x-switchyard-session-id": "standalone-fixture"},
+                        headers=session,
                     )
                     self.assertEqual(headers["x-model-router-selected-model"], "low")
-                    path, judge, native_headers = captured.get(timeout=5)
-                    self.assertEqual(path, "/v1/systemone")
-                    self.assertIn("NEXT model response", judge["questions"]["effort"]["instructions"])
-                    self.assertIn("authorization", {k.lower() for k in native_headers})
                     _, body, _ = captured.get(timeout=5)
                     self.assertEqual(body["reasoning_effort"], "low")
                     self.assertTrue(captured.empty())

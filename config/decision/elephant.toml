@@ -3,7 +3,7 @@
 type = "decision_api"
 base_url = "http://decision-api.daedalus.svc.cluster.local:30000/v1"
 model = "auto"
-classify_trigger = "every_request"
+classify_trigger = "user_turn"
 timeout_ms = 2000
 recent_turn_window = 6
 max_input_tokens = "auto"

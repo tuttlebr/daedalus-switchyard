@@ -1,0 +1,442 @@
+diff --git a/crates/libsy-llm-client/src/client.rs b/crates/libsy-llm-client/src/client.rs
+index 6308fc0..8110475 100644
+--- a/crates/libsy-llm-client/src/client.rs
++++ b/crates/libsy-llm-client/src/client.rs
+@@ -35,6 +35,8 @@ const ALLOWED_METADATA_HEADERS: &[&str] = &["x-request-id"];
+ // Headers tied to the inbound connection, destination, or body. The HTTP client
+ // must rebuild these for the upstream request, even when forwarding auth.
+ const NON_FORWARDABLE_HEADERS: &[&str] = &[
++    "x-switchyard-previous-target",
++    "x-switchyard-task-id",
+     "host",
+     "content-length",
+     "connection",
+diff --git a/crates/libsy-llm-client/src/run.rs b/crates/libsy-llm-client/src/run.rs
+index fd0a509..15f7fbc 100644
+--- a/crates/libsy-llm-client/src/run.rs
++++ b/crates/libsy-llm-client/src/run.rs
+@@ -67,7 +67,7 @@ pub async fn run(
+     let outcome = match clients.stored_state_owner(&request) {
+         Some(owner) => Ok(continue_on(owner, &algorithm_name, request)),
+         None => {
+-            drive(algorithm, request, models, {
++            drive(Arc::clone(&algorithm), request, models, {
+                 let routing_observations = routing_observations.clone();
+                 move |call| serve(routing_clients.clone(), call, routing_observations.clone())
+             })
+@@ -118,6 +118,12 @@ pub async fn run(
+     if let Some(observer) = &observer {
+         observer(RunObservation::RoutingOverhead(overhead));
+     }
++    if let Ok(response) = &result
++        && let Some(served) = response.served_model()
++        && served != &selected_model_id
++    {
++        algorithm.observe_fallback(&outcome.request, &selected_model_id, served);
++    }
+     result.map(|response| (selected_model_id, response))
+ }
+ 
+diff --git a/crates/libsy/src/core/algorithm.rs b/crates/libsy/src/core/algorithm.rs
+index bfb1814..42709f8 100644
+--- a/crates/libsy/src/core/algorithm.rs
++++ b/crates/libsy/src/core/algorithm.rs
+@@ -510,6 +510,9 @@ pub trait Algorithm: Send + Sync + 'static {
+     /// emits for its runs.
+     fn name(&self) -> &str;
+ 
++    /// Called after a different fallback target accepts the terminal answer request.
++    fn observe_fallback(&self, _request: &Request, _primary: &ModelId, _served: &ModelId) {}
++
+     /// Run one request to completion: make routing-time model calls with
+     /// [`Driver::call_model`] and return the terminal [`RoutingOutcome`].
+     /// The method an algorithm implements; [`run_stream`](Self::run_stream) drives it.
+diff --git a/crates/switchyard-runner/Cargo.toml b/crates/switchyard-runner/Cargo.toml
+index 4f946d2..f271f27 100644
+--- a/crates/switchyard-runner/Cargo.toml
++++ b/crates/switchyard-runner/Cargo.toml
+@@ -27,10 +27,10 @@ switchyard-llm-client.workspace = true
+ switchyard-protocol.workspace = true
+ strum_macros.workspace = true
+ thiserror.workspace = true
++tokio.workspace = true
+ toml = "1.1"
+ tracing.workspace = true
+ 
+ [dev-dependencies]
+ async-trait.workspace = true
+ futures-util.workspace = true
+-tokio.workspace = true
+diff --git a/crates/switchyard-runner/src/algorithm.rs b/crates/switchyard-runner/src/algorithm.rs
+index 6c8116e..7cfb8b9 100644
+--- a/crates/switchyard-runner/src/algorithm.rs
++++ b/crates/switchyard-runner/src/algorithm.rs
+@@ -357,7 +357,7 @@ pub enum AlgorithmSpec {
+     DecisionApi {
+         /// Used when the decision is unavailable, uncertain, or below its score gate.
+         default_target: String,
+-        /// Must be a native decision_api classifier with named choices and every_request.
++        /// Must be a native decision_api classifier with named choices.
+         classifier: CompositeClassifierConfig,
+     },
+     /// Picks a tier per turn by scoring signals from recent tool results.
+diff --git a/crates/switchyard-runner/src/decision_api.rs b/crates/switchyard-runner/src/decision_api.rs
+index 642c45f..791fd02 100644
+--- a/crates/switchyard-runner/src/decision_api.rs
++++ b/crates/switchyard-runner/src/decision_api.rs
+@@ -1,7 +1,7 @@
+ // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-//! Native SystemOne decisions for standalone per-request and Composite task routing.
++//! Native SystemOne decisions for standalone and Composite task routing.
+ 
+ use std::collections::BTreeMap;
+ use std::sync::Arc;
+@@ -16,6 +16,7 @@ use serde_json::{Value, json};
+ use switchyard_protocol::{Category, ContentBlock, ModelId, Request, Role};
+ 
+ use crate::algorithm::AlgorithmConfigError;
++use crate::task_retention::{Assignment, TaskAssignments};
+ 
+ const QUESTION: &str = "effort";
+ // Clef rounds every option probability to four decimal places.
+@@ -77,7 +78,7 @@ pub struct DecisionClassifierConfig {
+     /// Minimum efficient-choice probability; ambiguous decisions remain capable.
+     #[serde(default)]
+     pub efficient_threshold: Option<f64>,
+-    /// Composite uses user_turn/new_session; standalone requires every_request.
++    /// Standalone uses user_turn or every_request. Composite also supports new_session.
+     #[serde(default = "default_trigger")]
+     pub classify_trigger: ClassifyTrigger,
+     /// Recent messages following the preserved opening task.
+@@ -903,11 +904,12 @@ impl Classifier<State> for DecisionClassifier {
+     }
+ }
+ 
+-/// Stateless routing: tool continuations get the same fresh decision as user turns.
++/// Standalone routing with optional task-scoped assignment retention.
+ /// Only the configured default is a provider fallback; other choices are not a cascade.
+ pub(crate) struct DecisionRouter {
+     classifier: DecisionClassifier,
+     default_target: ModelId,
++    assignments: Option<TaskAssignments>,
+ }
+ 
+ impl DecisionRouter {
+@@ -916,36 +918,107 @@ impl DecisionRouter {
+         targets: &BTreeMap<String, ModelId>,
+         default_target: ModelId,
+     ) -> Result<Self, AlgorithmConfigError> {
+-        if config.classify_trigger != ClassifyTrigger::EveryRequest || config.choices.is_empty() {
++        if config.classify_trigger == ClassifyTrigger::NewSession || config.choices.is_empty() {
+             return Err(AlgorithmConfigError::new(
+-                "standalone decision_api requires named choices and classify_trigger = every_request",
++                "standalone decision_api requires named choices and classify_trigger = user_turn or every_request",
+             ));
+         }
++        let assignments =
++            (config.classify_trigger == ClassifyTrigger::UserTurn).then(TaskAssignments::default);
+         Ok(Self {
++            assignments,
+             classifier: DecisionClassifier::new(config, targets)?,
+             default_target,
+         })
+     }
+ }
+ 
++impl DecisionRouter {
++    async fn choose(&self, request: &mut Request, driver: &Driver) -> libsy::Result<ModelId> {
++        let (classification, _) = self
++            .classifier
++            .score(&mut State::default(), request, driver)
++            .await?;
++        Ok(classification
++            .argmax(false)?
++            .map_or_else(|| self.default_target.clone(), |score| score.target))
++    }
++
++    async fn task_target(
++        &self,
++        assignments: &TaskAssignments,
++        request: &mut Request,
++        driver: &Driver,
++    ) -> libsy::Result<ModelId> {
++        let acknowledged = request
++            .metadata
++            .as_ref()
++            .and_then(|m| m.http_headers.as_ref())
++            .and_then(|h| h.get("x-switchyard-previous-target"))
++            .and_then(|h| h.to_str().ok())
++            .and_then(|id| {
++                self.classifier
++                    .targets
++                    .values()
++                    .find(|target| target.as_str() == id)
++                    .or_else(|| {
++                        (id == self.default_target.as_str()).then_some(&self.default_target)
++                    })
++            });
++        let (target, source) = if let Some(key) = assignments.key(request) {
++            let slot = assignments.slot(key, acknowledged, &self.default_target);
++            // OnceCell coalesces concurrent attempts and releases a cancelled initializer.
++            let mut classified = false;
++            let entry = slot
++                .get_or_try_init(|| async {
++                    classified = true;
++                    self.choose(request, driver)
++                        .await
++                        .map(Assignment::classified)
++                })
++                .await?;
++            let target = entry.target.clone();
++            if classified {
++                return Ok(target);
++            }
++            let source = if acknowledged == Some(&target) {
++                "previous_target"
++            } else {
++                "task_cache"
++            };
++            (target, source)
++        } else if let Some(target) = acknowledged {
++            (target.clone(), "previous_target")
++        } else {
++            return self.choose(request, driver).await;
++        };
++        driver.set_evidence_if_empty(json!({"source":source, "selected_target":target}));
++        tracing::info!(event = "decision_api_reused", selected_target = %target, source);
++        Ok(target)
++    }
++}
++
+ #[async_trait]
+ impl Algorithm for DecisionRouter {
+     fn name(&self) -> &str {
+         "decision_api"
+     }
+ 
++    fn observe_fallback(&self, request: &Request, primary: &ModelId, served: &ModelId) {
++        if let Some(assignments) = &self.assignments {
++            assignments.observe_fallback(request, primary, served);
++        }
++    }
++
+     async fn route(
+         self: Arc<Self>,
+         driver: Driver,
+         mut request: Request,
+     ) -> libsy::Result<RoutingOutcome> {
+-        let (classification, _) = self
+-            .classifier
+-            .score(&mut State::default(), &mut request, &driver)
+-            .await?;
+-        let target = classification
+-            .argmax(false)?
+-            .map_or_else(|| self.default_target.clone(), |score| score.target);
++        let target = match &self.assignments {
++            Some(assignments) => self.task_target(assignments, &mut request, &driver).await?,
++            None => self.choose(&mut request, &driver).await?,
++        };
+         let fallbacks = if target == self.default_target {
+             Vec::new()
+         } else {
+@@ -1076,6 +1149,8 @@ uncertain_criteria = "Missing or ambiguous context."
+         ]);
+         assert!(DecisionClassifier::new(c.clone(), &targets).is_ok());
+         let default = ModelId::from("large-id");
++        assert!(DecisionRouter::new(c.clone(), &targets, default.clone()).is_ok());
++        c.classify_trigger = ClassifyTrigger::NewSession;
+         assert!(DecisionRouter::new(c.clone(), &targets, default.clone()).is_err());
+         c.classify_trigger = ClassifyTrigger::EveryRequest;
+         assert!(DecisionRouter::new(c.clone(), &targets, default.clone()).is_ok());
+diff --git a/crates/switchyard-runner/src/lib.rs b/crates/switchyard-runner/src/lib.rs
+index a7a5b0b..0200b59 100644
+--- a/crates/switchyard-runner/src/lib.rs
++++ b/crates/switchyard-runner/src/lib.rs
+@@ -6,6 +6,7 @@
+ mod algorithm;
+ mod config;
+ mod decision_api;
++mod task_retention;
+ mod failure;
+ mod provider_key_redactor;
+ mod route;
+diff --git a/crates/switchyard-runner/src/task_retention.rs b/crates/switchyard-runner/src/task_retention.rs
+new file mode 100644
+index 0000000..6846bd9
+--- /dev/null
++++ b/crates/switchyard-runner/src/task_retention.rs
+@@ -0,0 +1,172 @@
++// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Process-local task assignments. Only opaque keys and configured target IDs are retained.
++
++use std::collections::{HashMap, VecDeque};
++use std::hash::{BuildHasher, Hash, Hasher, RandomState};
++use std::io::{self, Write};
++use std::sync::{Arc, Mutex};
++
++use switchyard_protocol::{ContentBlock, ModelId, Request, Role};
++use tokio::sync::OnceCell;
++
++const CAPACITY: usize = 4096;
++type Slot = Arc<OnceCell<Assignment>>;
++
++pub(super) struct Assignment {
++    pub(super) target: ModelId,
++    // The only fallback is the configured default. A serving receipt for it supersedes
++    // any later-arriving acknowledgment of an earlier primary in this task.
++    served_default: bool,
++}
++
++impl Assignment {
++    pub(super) fn classified(target: ModelId) -> Self {
++        Self {
++            target,
++            served_default: false,
++        }
++    }
++
++    fn served(target: &ModelId, default: &ModelId) -> Self {
++        Self {
++            target: target.clone(),
++            served_default: target == default,
++        }
++    }
++}
++
++#[derive(Default)]
++struct Entries {
++    by_key: HashMap<u64, Slot>,
++    insertion_order: VecDeque<u64>,
++}
++
++pub(super) struct TaskKey {
++    hash: u64,
++    // Without a task/turn ID, a user-ended request can be a new, identical task.
++    opens_user_turn: bool,
++}
++
++#[derive(Default)]
++pub(super) struct TaskAssignments {
++    hash: RandomState,
++    entries: Mutex<Entries>,
++}
++
++impl TaskAssignments {
++    pub(super) fn key(&self, request: &Request) -> Option<TaskKey> {
++        let metadata = request.metadata.as_ref()?;
++        let session = metadata.session_id.as_deref().filter(|id| !id.is_empty());
++        let task = metadata.task_id.as_deref().filter(|id| !id.is_empty());
++        if task.is_none() && session.is_none() {
++            return None;
++        }
++        if metadata.is_subagent && metadata.agent_id.as_deref().is_none_or(str::is_empty) {
++            return None;
++        }
++        let mut hash = self.hash.build_hasher();
++        session.hash(&mut hash);
++        metadata.is_subagent.hash(&mut hash);
++        metadata.agent_id.hash(&mut hash);
++        // Separate callers that choose the same session or task ID. Keep credential bytes
++        // out of the assignment table and routing evidence.
++        if let Some(headers) = &metadata.http_headers {
++            for name in ["authorization", "x-api-key", "api-key", "x-goog-api-key"] {
++                headers
++                    .get(name)
++                    .map(|value| value.as_bytes())
++                    .hash(&mut hash);
++            }
++        }
++        let mut opens_user_turn = false;
++        if let Some(task) = task {
++            (0u8, task).hash(&mut hash);
++        } else if let Some(turn) = metadata.turn_id.as_deref().filter(|id| !id.is_empty()) {
++            (1u8, turn).hash(&mut hash);
++        } else {
++            // A session can have overlapping continuations or retry an earlier turn. Include
++            // the real user turn, excluding tool results carried in Anthropic user envelopes.
++            let messages = &request.llm_request.messages;
++            let position = messages.iter().rposition(|m| {
++                m.role == Role::User
++                    && m.content
++                        .iter()
++                        .any(|block| !matches!(block, ContentBlock::ToolResult(_)))
++            })?;
++            opens_user_turn = position + 1 == messages.len();
++            2u8.hash(&mut hash);
++            serde_json::to_writer(HashWriter(&mut hash), &messages[..=position]).ok()?;
++        }
++        Some(TaskKey {
++            hash: hash.finish(),
++            opens_user_turn,
++        })
++    }
++
++    pub(super) fn slot(
++        &self,
++        key: TaskKey,
++        acknowledged: Option<&ModelId>,
++        default: &ModelId,
++    ) -> Slot {
++        let mut entries = self.entries.lock().unwrap();
++        if let Some(existing) = entries.by_key.get_mut(&key.hash) {
++            if let Some(served) = acknowledged
++                && existing.get().is_none_or(|entry| {
++                    !entry.served_default && (&entry.target != served || served == default)
++                })
++            {
++                *existing = Arc::new(OnceCell::from(Assignment::served(served, default)));
++            } else if acknowledged.is_none() && key.opens_user_turn && existing.initialized() {
++                *existing = Arc::new(OnceCell::new());
++            }
++            return Arc::clone(existing);
++        }
++        let slot = Arc::new(OnceCell::new_with(
++            acknowledged.map(|target| Assignment::served(target, default)),
++        ));
++        if entries.by_key.len() == CAPACITY {
++            // Never invalidate a task's pending decision while another request is waiting
++            // for it. An exceptional overflow of 4096 concurrent cold tasks runs uncached.
++            let Some(position) = entries.insertion_order.iter().position(|key| {
++                let slot = &entries.by_key[key];
++                slot.initialized() || Arc::strong_count(slot) == 1
++            }) else {
++                return slot;
++            };
++            let oldest = entries.insertion_order.remove(position).unwrap();
++            entries.by_key.remove(&oldest);
++        }
++        entries.insertion_order.push_back(key.hash);
++        entries.by_key.insert(key.hash, Arc::clone(&slot));
++        slot
++    }
++
++    pub(super) fn observe_fallback(&self, request: &Request, primary: &ModelId, served: &ModelId) {
++        if let Some(key) = self.key(request)
++            && let Some(slot) = self.entries.lock().unwrap().by_key.get_mut(&key.hash)
++            && slot
++                .get()
++                .is_some_and(|entry| &entry.target == primary || &entry.target == served)
++        {
++            *slot = Arc::new(OnceCell::from(Assignment {
++                target: served.clone(),
++                served_default: true,
++            }));
++        }
++    }
++}
++
++// Hash structured user input, including images, without allocating a copy of its payload.
++struct HashWriter<'a, H>(&'a mut H);
++impl<H: Hasher> Write for HashWriter<'_, H> {
++    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
++        self.0.write(bytes);
++        Ok(bytes.len())
++    }
++    fn flush(&mut self) -> io::Result<()> {
++        Ok(())
++    }
++}

@@ -39,7 +39,7 @@ class ProviderRoutesTest(unittest.TestCase):
                 self.assertEqual(route["type"], "decision_api")
                 self.assertIn(route["default_target"], targets)
                 classifier = route["classifier"]
-                self.assertEqual(classifier["classify_trigger"], "every_request")
+                self.assertEqual(classifier["classify_trigger"], "user_turn")
                 self.assertEqual(classifier["max_input_tokens"], "auto")
                 self.assertTrue(classifier["truncate_input"])
                 self.assertEqual(set(classifier["choices"]), CATEGORIES)
