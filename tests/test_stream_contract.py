@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
+from scripts.list_api_key_envs import api_key_environment_names
 from scripts.render_routes import compose_source
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,10 +145,9 @@ class StreamContractTest(unittest.TestCase):
             if chat_provider:
                 source = source.replace('format = "openai_responses"', 'format = "openai_chat"')
             environment = {"PATH": os.environ.get("PATH", "")}
+            environment.update(dict.fromkeys(api_key_environment_names(path), "synthetic-key"))
             for client in config["llm_clients"].values():
                 source = source.replace(client["base_url"], base)
-                if client.get("api_key_env"):
-                    environment[client["api_key_env"]] = "synthetic-key"
             classifier = config["routes"]["stage"]["classifier"]
             source = source.replace(classifier["base_url"], base)
             # Affinity placeholders and judge discovery are not under test.
