@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.render_routes import compose_source, load_config
+from scripts.render_routes import dumps, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 CATEGORIES = {"instant", "low", "high", "max"}
@@ -76,15 +76,14 @@ class ProviderRoutesTest(unittest.TestCase):
         for name, config in providers():
             with self.subTest(provider=name), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "routes.toml"
-                source = compose_source(ROOT / name)
-                path.write_text(source.replace(
-                    '[routes.stage.classifier]\ntype = "decision_api"',
-                    '[routes.stage.classifier]\ntype = "decision_api"\napi_key_env = "DECISION_API_KEY"',
-                ))
+                classifier = config["routes"]["stage"]["classifier"]
+                classifier["api_key_env"] = "DECISION_API_KEY"
+                path.write_text(dumps(config))
                 self.assertEqual(helper.api_key_environment_names(path), sorted({"DECISION_API_KEY"} | {
                     client["api_key_env"] for client in config["llm_clients"].values() if "api_key_env" in client
                 }))
-                path.write_text(path.read_text().replace('api_key_env = "DECISION_API_KEY"', 'api_key_env = "invalid-key"'))
+                classifier["api_key_env"] = "invalid-key"
+                path.write_text(dumps(config))
                 with self.assertRaises(ValueError):
                     helper.api_key_environment_names(path)
 
