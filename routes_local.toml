@@ -1,0 +1,6 @@
+include = [
+  "config/llms/local.toml",
+  "config/decision/elephant.toml",
+  "config/routing/four-category.toml",
+]
+schema_version = 1

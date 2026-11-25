@@ -1,0 +1,32 @@
+# The Dynamo frontend serves this model directly without a provider API key.
+[llm_clients.local]
+format = "openai_chat"
+base_url = "http://mx-inkling-2-mini-spark-tp1-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
+
+# Inkling reads chat_template_kwargs.reasoning_effort. Named levels are none (0),
+# minimal (0.1), low (0.2), medium (0.7), high (0.9, default), and xhigh/max (0.99).
+# Chat Completions callers can override a route with any named level or a number from 0 to 0.99.
+# https://huggingface.co/thinkingmachines/Inkling-2-Mini/blob/main/chat_template.jinja
+[targets.max]
+id = "max"
+model = "thinkingmachines/Inkling-2-Mini"
+llm_client = "local"
+extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "max" } }
+
+[targets.high]
+id = "high"
+model = "thinkingmachines/Inkling-2-Mini"
+llm_client = "local"
+extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "high" } }
+
+[targets.low]
+id = "low"
+model = "thinkingmachines/Inkling-2-Mini"
+llm_client = "local"
+extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "low" } }
+
+[targets.instant]
+id = "instant"
+model = "thinkingmachines/Inkling-2-Mini"
+llm_client = "local"
+extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "none" } }

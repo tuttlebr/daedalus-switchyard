@@ -121,6 +121,11 @@ includes every declared client, even a client not currently used by a target,
 so supply its credentials or deliberately remove that unused declaration in
 your own profile. Inspect the composed file for current models and settings.
 
+`routes_local.toml` sends all four generation targets to Inkling 2 Mini through
+the Dynamo frontend in the `daedalus-dynamo` namespace. It uses OpenAI Chat
+Completions without a provider API key. The service URL and served model ID
+are in `config/llms/local.toml`. Select it with `ROUTES_FILE=routes_local.toml`.
+
 Inspect the composed configuration without resolving header variables:
 
 ```bash
