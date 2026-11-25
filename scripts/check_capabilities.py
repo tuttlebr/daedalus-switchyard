@@ -123,6 +123,7 @@ class FailureDetails:
     finish_reason: str | None = None
     content_chars: int | None = None
     tool_call_parts: int | None = None
+    observed_call_count: int | None = None
     done_seen: bool | None = None
     violation: str | None = None
 
@@ -195,6 +196,8 @@ def failure_message(error: Exception) -> str:
         "invalid_tool_calls": "The provider sent malformed tool-call fragments.",
         "text_mismatch": "The model did not return the requested text marker.",
         "tool_not_selected": "The model did not select exactly one synthetic probe tool.",
+        "parallel_calls_missing": "The model did not return both parallel probe calls.",
+        "duplicate_call_id": "Two probe calls used the same call ID.",
         "invalid_arguments": "The model returned incorrect arguments for the synthetic probe tool.",
         "result_not_consumed": "The model did not return the fresh marker supplied by the probe tool.",
         "incomplete": "The provider reported a failed or incomplete response.",
@@ -476,15 +479,15 @@ def read_exchange(
     return {"text": text, "calls": ordered, "history": [assistant], "model": model}
 
 
-def check_target(client, target, *, timeout=60, max_tokens=4096, transport=exchange):
+def check_target(client, target, *, timeout=60, max_tokens=4096, transport=exchange, check_parallel=False):
     details = FailureDetails(stage="setup")
     with failure_context(details):
-        return run_target(client, target, timeout, max_tokens, transport, details)
+        return run_target(client, target, timeout, max_tokens, transport, details, check_parallel)
 
 
 def run_target(
     client: dict, target: dict, timeout: float, max_tokens: int,
-    transport: Callable, details: FailureDetails,
+    transport: Callable, details: FailureDetails, check_parallel: bool,
 ) -> dict:
     api = client["format"]
     require(api in ("openai_chat", "openai_responses"), "unsupported_api")
@@ -508,10 +511,12 @@ def run_target(
     def send(body: dict, stage: str) -> dict:
         details.stage = stage
         details.request_id = None
+        details.observed_call_count = None
         result = transport(url, key, body, api, timeout)
         diagnostics = result.get("diagnostics")
         if diagnostics is not None:
             details.request_id = diagnostics.request_id
+        details.observed_call_count = len(result["calls"])
         identities.append(result["model"])
         return result
 
@@ -520,54 +525,69 @@ def run_target(
         "text",
     )
     require(text["text"].strip() == "CANARY_OK" and not text["calls"], "text_mismatch")
-    for forced in (False, True):
-        conversation = [{"role": "user", "content": PROMPT}]
-        tool = (
-            {"type": "function", "function": TOOL}
-            if chat
-            else {"type": "function", **TOOL}
-        )
-        choice = (
-            (
-                {"type": "function", "function": {"name": "probe_read"}}
-                if chat
-                else {"type": "function", "name": "probe_read"}
+    checks = ["text"]
+    stages = ["automatic_tool", "forced_tool"]
+    if check_parallel:
+        stages.append("parallel_tool")
+    for stage in stages:
+        parallel = stage == "parallel_tool"
+        keys = ("north", "south") if parallel else ("probe",)
+        prompt = PROMPT
+        definition = TOOL
+        if parallel:
+            prompt = (
+                "Call probe_read twice in the same turn, once for north and once for south. "
+                "Wait for both results, then reply with only the north marker, a space, "
+                "and the south marker."
             )
-            if forced
-            else "auto"
-        )
-        body = {**base, field: conversation, "tools": [tool], "tool_choice": choice}
-        stage = "forced_tool" if forced else "automatic_tool"
-        result = send(body, stage + "_selection")
-        require(len(result["calls"]) == 1, "tool_not_selected")
-        call = result["calls"][0]
-        function = call["function"] if chat else call
-        call_id = call.get("id") if chat else call.get("call_id")
-        require(isinstance(call_id, str) and bool(call_id), "missing_call_id")
-        require(function.get("name") == "probe_read", "wrong_tool")
-        require(
-            json.loads(function["arguments"]) == {"key": "probe"}, "invalid_arguments"
-        )
-        marker = uuid.uuid4().hex
-        receipt = (
-            {"role": "tool", "tool_call_id": call_id, "content": marker}
-            if chat
-            else {"type": "function_call_output", "call_id": call_id, "output": marker}
-        )
+            definition = {**TOOL, "parameters": {
+                **PARAMETERS, "properties": {"key": {"type": "string", "enum": list(keys)}},
+            }}
+        conversation = [{"role": "user", "content": prompt}]
+        tool = {"type": "function", "function": definition} if chat else {"type": "function", **definition}
+        body = {**base, field: conversation, "tools": [tool]}
+        selection = {"tool_choice": "auto"}
+        if stage == "forced_tool":
+            name = {"name": TOOL["name"]}
+            selection = {
+                "tool_choice": {"type": "function", **({"function": name} if chat else name)},
+                "parallel_tool_calls": False,
+            }
+        elif parallel:
+            selection["parallel_tool_calls"] = True
+
+        result = send({**body, **selection}, stage + "_selection")
+        calls = result["calls"]
+        require(len(calls) == len(keys), "parallel_calls_missing" if parallel else "tool_not_selected")
+        markers = {}
+        call_ids = set()
+        receipts = []
+        for call in calls:
+            function = call["function"] if chat else call
+            call_id = call.get("id") if chat else call.get("call_id")
+            require(isinstance(call_id, str) and bool(call_id), "missing_call_id")
+            require(call_id not in call_ids, "duplicate_call_id")
+            call_ids.add(call_id)
+            require(function.get("name") == TOOL["name"], "wrong_tool")
+            args = json.loads(function["arguments"])
+            require(isinstance(args, dict) and set(args) == {"key"}
+                    and args["key"] in keys and args["key"] not in markers, "invalid_arguments")
+            lookup_key = args["key"]
+            markers[lookup_key] = uuid.uuid4().hex
+            value = json.dumps({"key": lookup_key, "marker": markers[lookup_key]}) if parallel else markers[lookup_key]
+            receipts.append(
+                {"role": "tool", "tool_call_id": call_id, "content": value}
+                if chat else {"type": "function_call_output", "call_id": call_id, "output": value}
+            )
         final = send(
-            {
-                **body,
-                field: conversation + result["history"] + [receipt],
-                "tool_choice": "none",
-            },
+            {**body, field: conversation + result["history"] + receipts, "tool_choice": "none"},
             stage + "_result",
         )
-        require(
-            not final["calls"] and final["text"].strip() == marker,
-            "result_not_consumed",
-        )
+        expected = " ".join(markers[key] for key in keys)
+        require(not final["calls"] and final["text"].strip() == expected, "result_not_consumed")
+        checks.append(stage + "_roundtrip")
     return {
-        "checks": ["text", "automatic_tool_roundtrip", "forced_tool_roundtrip"],
+        "checks": checks,
         "reported_models": sorted({m for m in identities if m}),
         "unknown_model_responses": identities.count(None),
     }
@@ -600,6 +620,8 @@ def main():
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--check-parallel-tools", action="store_true",
+                        help="Also require two independent calls and both fresh results in one round trip.")
     args = parser.parse_args()
     require(
         0 < args.timeout <= 180 and 128 <= args.max_output_tokens <= 16384,
@@ -661,6 +683,7 @@ def main():
                         target,
                         timeout=args.timeout,
                         max_tokens=args.max_output_tokens,
+                        check_parallel=args.check_parallel_tools,
                     ),
                     passed=True,
                 )

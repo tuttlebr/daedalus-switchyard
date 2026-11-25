@@ -39,7 +39,8 @@ full-window prompt, prove long-context quality, or change route declarations.
 
 Each target must stream a completed text response, select a synthetic tool both
 automatically and explicitly, and consume a fresh unpredictable value returned
-by that tool. The gate checks arguments and call IDs. The tool is implemented
+by that tool. Only the named selection request sets `parallel_tool_calls=false` to require one call.
+The gate checks arguments and call IDs. The tool is implemented
 inside the checker and has no external effects.
 The Chat stream parser accepts nullable `delta` and `tool_calls`, usage-only
 chunks, and an empty chunk repeating the same finish reason, as emitted by
@@ -74,6 +75,10 @@ timeout 15m python3 scripts/check_capabilities.py "$probe_dir/routes.toml" \
 The per-request timeout is separate from the outer deadline (`timeout` requires
 GNU coreutils or an equivalent process deadline on your platform). Each successful
 distinct settings group sends five generation requests plus model discovery.
+Pass `--check-parallel-tools` to the checker, or set `CAPABILITY_CHECK_PARALLEL_TOOLS=1`
+for deployment, to add two requests per settings group. This probe requests two independent
+lookups in one turn, verifies distinct IDs and arguments, then checks that the model
+returns both fresh markers in the requested order.
 The helper forces streaming, replaces output-token limits with its CLI cap, and
 sets `store=false` for Responses. It checks completed text and tool continuation;
 it does not establish that every configured reasoning control affects inference.
@@ -91,7 +96,9 @@ identity, advertised and required context windows, elapsed time and sanitized fa
 Failures additionally include `error_message` and, when available, `error_details`:
 
 - `stage`: `text`, `automatic_tool_selection`, `automatic_tool_result`,
-  `forced_tool_selection`, `forced_tool_result`, or `setup`.
+  `forced_tool_selection`, `forced_tool_result`, `parallel_tool_selection`,
+  `parallel_tool_result`, or `setup`.
+- `observed_call_count`: number of reconstructed calls for a completed response.
 - `request_id`: a bounded provider request ID from a response header, including
   HTTP error responses. Credentials are excluded.
 - Stream diagnostics: the one-based JSON data-event index, previous/current

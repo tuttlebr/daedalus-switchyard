@@ -356,7 +356,7 @@ class Capabilities(unittest.TestCase):
     def exercise(
         self, api, fault=None, *, nullable_tool_calls=False,
         repeat_terminal=False, tool_finish_reason="tool_calls", terminal_variant=None,
-        terminal_tool_parts=None, fault_at_request=None, reject_library_agent=False,
+        terminal_tool_parts=None, fault_at_request=None, reject_library_agent=False, check_parallel=False,
     ):
         seen = []
 
@@ -389,6 +389,17 @@ class Capabilities(unittest.TestCase):
                 if active_fault == "invented_result" and final:
                     text = "guessed"
                 args = json.dumps({"key": "wrong" if active_fault == "arguments" else "probe"})
+                parallel_keys = ("south", "north")
+                if active_fault == "extra_call":
+                    parallel_keys = ("probe", "probe")
+                elif active_fault == "duplicate_key":
+                    parallel_keys = ("south", "south")
+                if final and len(seen) == 7:
+                    values = [json.loads(item["content" if chat else "output"]) for item in history[-2:]]
+                    markers = {item["key"]: item["marker"] for item in values}
+                    text = markers["north"] + " " + markers["south"]
+                    if active_fault == "swapped_results":
+                        text = markers["south"] + " " + markers["north"]
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("X-Request-Id", "req_fixture")
@@ -411,6 +422,12 @@ class Capabilities(unittest.TestCase):
                         if calling
                         else {"content": text}
                     )
+                    if calling and (body.get("parallel_tool_calls") is True or active_fault == "extra_call"):
+                        delta["tool_calls"] = [
+                            {"index": i, "id": "call_" + str(0 if active_fault == "duplicate_id" else i),
+                             "type": "function", "function": {"name": "probe_read", "arguments": json.dumps({"key": k})}}
+                            for i, k in enumerate(parallel_keys)
+                        ]
                     if nullable_tool_calls:
                         delta.setdefault("tool_calls", None)
                     if active_fault == "invalid_tool_calls":
@@ -478,12 +495,19 @@ class Capabilities(unittest.TestCase):
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
+                    items = [item]
+                    if calling and (body.get("parallel_tool_calls") is True or active_fault == "extra_call"):
+                        items = [
+                            {**item, "call_id": "call_" + str(0 if active_fault == "duplicate_id" else i),
+                             "arguments": json.dumps({"key": k})}
+                            for i, k in enumerate(parallel_keys)
+                        ]
                     event = {
                         "type": "response.completed",
                         "response": {
                             "status": "completed",
                             "model": "fixture",
-                            "output": [item],
+                            "output": items,
                         },
                     }
                     self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
@@ -498,10 +522,22 @@ class Capabilities(unittest.TestCase):
                     "base_url": f"http://127.0.0.1:{server.server_port}/v1",
                 },
                 {"model": "fixture"},
-                timeout=2,
+                timeout=2, check_parallel=check_parallel,
             )
             self.assertEqual(result["reported_models"], ["fixture"])
-            self.assertEqual(len(seen), 5)
+            self.assertEqual(len(seen), 7 if check_parallel else 5)
+            self.assertEqual([b.get("parallel_tool_calls") for b in seen[:5]], [None, None, None, False, None])
+            if check_parallel:
+                self.assertIs(seen[5]["parallel_tool_calls"], True)
+                self.assertNotIn("parallel_tool_calls", seen[6])
+                self.assertIn("parallel_tool_roundtrip", result["checks"])
+                chat = api == "openai_chat"
+                receipts = seen[6]["messages" if chat else "input"][-2:]
+                by_id = {
+                    item["tool_call_id" if chat else "call_id"]: json.loads(item["content" if chat else "output"])["key"]
+                    for item in receipts
+                }
+                self.assertEqual(by_id, {"call_0": "south", "call_1": "north"})
             self.assertNotIn(
                 seen[2]["messages" if api == "openai_chat" else "input"][-1].get(
                     "content", "unused"
@@ -522,6 +558,23 @@ class Capabilities(unittest.TestCase):
         for api in ("openai_chat", "openai_responses"):
             with self.subTest(api=api):
                 self.exercise(api)
+
+    def test_parallel_selection_and_result_linkage(self):
+        for api in ("openai_chat", "openai_responses"):
+            with self.subTest(api=api):
+                self.exercise(api, check_parallel=True)
+                for index, fault, expected in ((6, "duplicate_id", "duplicate_call_id"),
+                                               (6, "duplicate_key", "invalid_arguments"),
+                                               (7, "swapped_results", "result_not_consumed")):
+                    with self.assertRaisesRegex(probe.CheckFailed, expected):
+                        self.exercise(api, fault, fault_at_request=index, check_parallel=True)
+
+    def test_named_single_call_rejects_a_pair_and_reports_the_count(self):
+        for api in ("openai_chat", "openai_responses"):
+            with self.subTest(api=api), self.assertRaisesRegex(probe.CheckFailed, "tool_not_selected") as caught:
+                self.exercise(api, "extra_call", fault_at_request=4)
+            self.assertEqual(caught.exception.details.stage, "forced_tool_selection")
+            self.assertEqual(caught.exception.details.observed_call_count, 2)
 
     def test_nullable_tool_calls_and_repeated_empty_chat_terminal(self):
         # Mercury can send tool_calls: null and repeat the finish reason in

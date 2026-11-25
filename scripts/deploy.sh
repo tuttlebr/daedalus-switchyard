@@ -35,6 +35,7 @@ fi
 NAMESPACE="daedalus"
 deploy_setting_names=(RELEASE_NAME SECRET_NAME EXPECTED_CONTEXT IMAGE_REPOSITORY
   IMAGE_TAG IMAGE_PLATFORM IMAGE_DIGEST HELM_TIMEOUT CAPABILITY_TIMEOUT CAPABILITY_MAX_OUTPUT_TOKENS
+  CAPABILITY_CHECK_PARALLEL_TOOLS
   DEPLOY_BACKUP_DIR)
 # Setting names are fixed identifiers; keep caller values in prefixed scalars.
 for deploy_setting_name in "${deploy_setting_names[@]}"; do
@@ -185,9 +186,13 @@ helm template "${RELEASE_NAME}" "${CHART_DIR}" \
 # A listed model and a healthy pod do not prove generation or tool support.
 # Warn about advertised context limits that do not meet route declarations.
 # Run before any namespace/Secret/release mutation; a generation/tool failure leaves live routes intact.
-python3 "${PROJECT_DIR}/scripts/check_capabilities.py" "${ROUTES_FILE}" \
-  --timeout "${CAPABILITY_TIMEOUT:-60}" \
-  --max-output-tokens "${CAPABILITY_MAX_OUTPUT_TOKENS:-4096}"
+capability_args=(--timeout "${CAPABILITY_TIMEOUT:-60}" --max-output-tokens "${CAPABILITY_MAX_OUTPUT_TOKENS:-4096}")
+case "${CAPABILITY_CHECK_PARALLEL_TOOLS:-0}" in
+  0) ;;
+  1) capability_args+=(--check-parallel-tools) ;;
+  *) echo "CAPABILITY_CHECK_PARALLEL_TOOLS must be 0 or 1" >&2; exit 64 ;;
+esac
+python3 "${PROJECT_DIR}/scripts/check_capabilities.py" "${ROUTES_FILE}" "${capability_args[@]}"
 
 # Preflight and provider checks finish before registry writes. Build from this
 # checkout and publish exactly the repository/tag that the upgrade will select.
