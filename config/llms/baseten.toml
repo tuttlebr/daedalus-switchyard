@@ -8,9 +8,9 @@ extra_headers = { x-session-affinity = "${GLOBAL_SESSION_ID}" }
 
 [targets.max]
 id = "max"
-model = "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast"
+model = "moonshotai/Kimi-K3.1-Pro"
 llm_client = "baseten"
-extra_body = { stream = true, reasoning = { effort = "max" } }
+extra_body = { stream = true, reasoning = { effort = "high" } }
 
 [targets.high]
 id = "high"

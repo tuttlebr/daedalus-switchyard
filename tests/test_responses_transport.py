@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
+from scripts.list_api_key_envs import api_key_environment_names
 from scripts.render_routes import compose_source
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,12 +81,11 @@ class ResponsesTransportTest(unittest.TestCase):
             source = compose_source(path)
             config = tomllib.loads(source)
             environment = os.environ.copy()
+            environment.update(dict.fromkeys(api_key_environment_names(path), "synthetic-key"))
+            base = f"http://127.0.0.1:{upstream.server_port}/v1"
+            source = source.replace(config["routes"]["stage"]["classifier"]["base_url"], base)
             for client in config["llm_clients"].values():
-                source = source.replace(
-                    client["base_url"], f"http://127.0.0.1:{upstream.server_port}/v1"
-                )
-                if client.get("api_key_env"):
-                    environment[client["api_key_env"]] = "synthetic-key"
+                source = source.replace(client["base_url"], base)
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]

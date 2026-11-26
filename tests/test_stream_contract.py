@@ -24,7 +24,7 @@ from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
 from scripts.list_api_key_envs import api_key_environment_names
-from scripts.render_routes import compose_source
+from scripts.render_routes import compose_source, dumps
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = os.environ.get("SWITCHYARD_TEST_BINARY")
@@ -108,6 +108,9 @@ class StreamContractTest(unittest.TestCase):
                     })
                 else:
                     state["captured"].append((self.path, body))
+                    if body["model"] == state.get("unavailable_model"):
+                        self.send_error(503)
+                        return
                     reply = chat_reply if self.path.endswith("/chat/completions") else responses_reply
                     if "chat_frames" in state:
                         content_type = "text/event-stream"
@@ -147,6 +150,9 @@ class StreamContractTest(unittest.TestCase):
             environment = {"PATH": os.environ.get("PATH", "")}
             environment.update(dict.fromkeys(api_key_environment_names(path), "synthetic-key"))
             for client in config["llm_clients"].values():
+                if client["base_url"] == "https://api.openai.com/v1":
+                    # The synthetic provider runs on loopback instead of the native host.
+                    source = source.replace("[llm_clients.openai]", "[llm_clients.openai]\nrequires_reasoning_replay = true")
                 source = source.replace(client["base_url"], base)
             classifier = config["routes"]["stage"]["classifier"]
             source = source.replace(classifier["base_url"], base)
@@ -181,7 +187,7 @@ class StreamContractTest(unittest.TestCase):
                     else:
                         self.fail("Gateway did not become ready")
 
-                    def call(model, inbound, stream):
+                    def call(model, inbound, stream, **fields):
                         payload = {"model": model}
                         if stream is not None:
                             payload["stream"] = stream
@@ -191,6 +197,7 @@ class StreamContractTest(unittest.TestCase):
                         else:
                             payload["input"] = [{"role": "user", "content": "Reply OK."}]
                             endpoint = "/v1/responses"
+                        payload.update(fields)
                         state["captured"].clear()
                         request = Request(
                             url + endpoint, data=json.dumps(payload).encode(),
@@ -227,6 +234,93 @@ class StreamContractTest(unittest.TestCase):
                                 self.assertIn("OK", raw)
                                 exercised += 1
         self.assertGreater(exercised, 0, "No provider routes discovered")
+
+    def test_history_replay_depends_on_destination_and_tool_calls(self):
+        user = {"role": "user", "content": "Keep the visible words <think>example</think>."}
+        followup = {"role": "user", "content": "Read the marker."}
+        args = '{"reasoning":"tool argument"}'
+        receipt = '{"reasoning_content":"tool result"}'
+        trace = {"type": "reasoning", "id": "rs_fixture", "summary": [],
+                 "encrypted_content": "private-ciphertext"}
+        histories = {
+            "responses": {"input": [
+                user,
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "old-trace"}]},
+                {"role": "assistant", "content": "Visible answer."},
+                followup, trace,
+                {"type": "function_call", "name": "lookup", "arguments": args, "call_id": "call_fixture"},
+                {"type": "function_call_output", "output": receipt, "call_id": "call_fixture"},
+            ]},
+            "chat": {"messages": [
+                user, {"role": "assistant", "content": "Visible answer.", "reasoning_content": "old-trace"},
+                followup,
+                {"role": "assistant", "content": None, "reasoning": "tool-trace",
+                 "tool_calls": [{"type": "function", "id": "call_fixture",
+                                 "function": {"name": "lookup", "arguments": args}}]},
+                {"role": "tool", "tool_call_id": "call_fixture", "content": receipt},
+            ]},
+        }
+        for source in ("local", "fireworks", "openai"):
+            with self.gateway(ROOT / f"routes_{source}.toml") as (call, state, config):
+                for inbound, fields in histories.items():
+                    with self.subTest(source=source, inbound=inbound):
+                        _, response = call("daedalus/low", inbound, True, **fields)
+                        self.assertIn("OK", response)
+                        [(endpoint, body)] = state["captured"]
+                        sent = json.dumps(body)
+                        self.assertNotIn("old-trace", sent)
+                        self.assertIn(user["content"], sent)
+                        self.assertIn("Visible answer.", sent)
+                        if source == "local":
+                            self.assertEqual(endpoint, "/v1/chat/completions")
+                            self.assertEqual(body["chat_template_kwargs"]["reasoning_effort"], "low")
+                            assistant, result = body["messages"][-2:]
+                            self.assertEqual(assistant["tool_calls"][0]["id"], "call_fixture")
+                            self.assertEqual(json.loads(assistant["tool_calls"][0]["function"]["arguments"]), json.loads(args))
+                            self.assertEqual((result["tool_call_id"], result["content"]), ("call_fixture", receipt))
+                        else:
+                            self.assertEqual(endpoint, "/v1/responses")
+                            self.assertEqual(body["reasoning"], config["targets"]["low"]["extra_body"]["reasoning"])
+                            function, result = body["input"][-2:]
+                            self.assertEqual((function["call_id"], json.loads(function["arguments"])), ("call_fixture", json.loads(args)))
+                            self.assertEqual((result["call_id"], result["output"]), ("call_fixture", receipt))
+                        if source == "fireworks":
+                            self.assertEqual(body["reasoning_history"], "disabled")
+                        if source == "openai":
+                            if inbound == "responses":
+                                self.assertIn(trace, body["input"])
+                            else:
+                                self.assertIn("tool-trace", sent)
+                        else:
+                            self.assertNotIn("private-ciphertext", sent)
+                            self.assertNotIn("tool-trace", sent)
+
+    def test_fallback_applies_its_own_replay_policy(self):
+        config = tomllib.loads(compose_source(ROOT / "routes_blended.toml"))
+        config["routes"]["stage"]["classifier"]["classify_trigger"] = "every_request"
+        config["llm_clients"]["baseten"]["max_retries"] = 0
+        config["llm_clients"]["openai"].update(
+            base_url="http://strict-provider.invalid/v1", requires_reasoning_replay=True
+        )
+        config["targets"]["low"]["model"] = "optional-provider"
+        config["targets"]["high"].update(model="strict-provider", llm_client="openai")
+        reasoning = {"type": "reasoning", "id": "rs_call", "summary": [], "encrypted_content": "opaque"}
+        with tempfile.TemporaryDirectory() as directory:
+            routes = Path(directory) / "routes.toml"
+            routes.write_text(dumps(config))
+            with self.gateway(routes) as (call, state, _):
+                state["unavailable_model"] = "optional-provider"
+                _, raw = call("daedalus", "responses", True, input=[
+                    {"role": "user", "content": "Read the marker."}, reasoning,
+                    {"type": "function_call", "name": "lookup", "call_id": "one", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "one", "output": "marker"},
+                ])
+                self.assertIn("response.completed", raw)
+                first, fallback = [body for _, body in state["captured"]]
+                self.assertEqual((first["model"], fallback["model"]), ("optional-provider", "strict-provider"))
+                self.assertNotIn(reasoning, first["input"])
+                self.assertEqual(fallback["input"][1], reasoning)
+                self.assertEqual(first["input"][-2:], fallback["input"][-2:])
 
     def test_chat_tool_deltas_need_a_finish_for_their_own_choice(self):
         def frame(index, delta, finish=None):

@@ -88,7 +88,7 @@ For example, `routes_baseten.toml` selects:
 ```toml
 include = [
   "config/llms/baseten.toml",
-  "config/decision/elephant.toml",
+  "config/decision/bison.toml",
   "config/routing/four-category.toml",
 ]
 schema_version = 1
@@ -205,7 +205,21 @@ Target `id` identifies a routing choice; `model` identifies the upstream model.
 `extra_body` supplies defaults through a shallow top-level merge. Trusted caller
 fields take precedence, including reasoning effort. Responses requests are
 translated to Chat for Chat clients; native Responses clients use that transport.
-Preserve tool-call/result IDs, reasoning history and terminal stream handling.
+On each provider request, Switchyard removes prior assistant reasoning from the
+explicit conversation history, including on the local Inkling route. Visible
+answers, tool arguments, results and call IDs stay in order. Each new pass uses
+the selected reasoning effort and can return fresh reasoning to the caller.
+
+Native OpenAI (`api.openai.com`) and Anthropic Messages keep reasoning paired
+with tool calls. Native Responses also keeps reasoning paired with a stored
+assistant message ID on endpoints requiring replay. For a compatible endpoint
+with that requirement, set `requires_reasoning_replay = true` under its
+`[llm_clients.<name>]` table. Switchyard applies the selected destination's
+policy on each attempt. The provider manages any history referenced by
+`previous_response_id`. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling),
+[OpenAI stored item pairing](https://github.com/openai/openai-agents-python/issues/5507),
+and [Anthropic extended thinking](https://platform.claude.com/docs/en/build-with-claude/thinking).
+
 Every shipped generation target sets `extra_body.stream = true`. The
 `required-streaming.patch` makes this a transport policy: even a same-format
 caller sending `stream=false` receives SSE. Other `extra_body` fields remain

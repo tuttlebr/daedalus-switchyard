@@ -8,21 +8,21 @@ extra_headers = { x-multi-turn-session-id = "${GLOBAL_SESSION_ID}", x-session-af
 
 [targets.max]
 id = "max"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/models/inkling-2-small"
 llm_client = "fireworks"
-extra_body = { stream = true, reasoning = { effort = "max" }, reasoning_history = "interleaved", context_length_exceeded_behavior = "truncate" }
+extra_body = { stream = true, reasoning = { effort = "high" }, reasoning_history = "disabled", context_length_exceeded_behavior = "truncate" }
 
 [targets.high]
 id = "high"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/models/inkling-2-small"
 llm_client = "fireworks"
-extra_body = { stream = true, reasoning = { effort = "high" }, reasoning_history = "interleaved", context_length_exceeded_behavior = "truncate" }
+extra_body = { stream = true, reasoning = { effort = "medium" }, reasoning_history = "disabled", context_length_exceeded_behavior = "truncate" }
 
 [targets.low]
 id = "low"
-model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
+model = "accounts/fireworks/models/inkling-2-small"
 llm_client = "fireworks"
-extra_body = { stream = true, reasoning = { effort = "low" }, reasoning_history = "interleaved", context_length_exceeded_behavior = "truncate" }
+extra_body = { stream = true, reasoning = { effort = "low" }, reasoning_history = "disabled", context_length_exceeded_behavior = "truncate" }
 
 # Keep reasoning enabled; instant shares the lightest depth with low.
 [targets.instant]

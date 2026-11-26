@@ -52,4 +52,4 @@ extra_body = { stream = true, reasoning = { effort = "low" } }
 id = "instant"
 model = "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast"
 llm_client = "fireworks"
-extra_body = { stream = true }
+extra_body = { stream = true, reasoning_history = "disabled" }

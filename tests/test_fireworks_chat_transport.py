@@ -21,7 +21,8 @@ from urllib.request import Request, urlopen
 
 import tomllib
 
-from scripts.render_routes import compose_source, load_config
+from scripts.list_api_key_envs import api_key_environment_names
+from scripts.render_routes import compose_source, dumps, load_config
 from test_stream_contract import responses_reply
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -332,11 +333,6 @@ class FireworksChatTransportTest(unittest.TestCase):
                         provider,
                         f"http://127.0.0.1:{upstream.server_port}{decision_suffix}",
                     )
-                    if decision_auth:
-                        source = source.replace(
-                            '[routes.stage.classifier]\ntype = "decision_api"',
-                            '[routes.stage.classifier]\ntype = "decision_api"\napi_key_env = "NATIVE_DECISION_TEST_KEY"',
-                        )
                 if judge_delay or judge_body_delay:
                     source = source.replace(
                         "timeout_ms = 5000", "timeout_ms = 40"
@@ -364,12 +360,17 @@ class FireworksChatTransportTest(unittest.TestCase):
                         f"http://127.0.0.1:{upstream.server_port}/v1",
                     )
                 path = Path(directory) / "routes.toml"
+                if decision_auth:
+                    fixture = tomllib.loads(source)
+                    fixture["routes"]["stage"]["classifier"]["api_key_env"] = "NATIVE_DECISION_TEST_KEY"
+                    source = dumps(fixture)
                 path.write_text(source)
                 with socket.socket() as sock:
                     sock.bind(("127.0.0.1", 0))
                     port = sock.getsockname()[1]
                 env = {
                     **os.environ,
+                    **dict.fromkeys(api_key_environment_names(path), "synthetic-key"),
                     "FIREWORKS_API_KEY": redaction_key,
                     "LOCAL_API_KEY": redaction_key,
                     "NATIVE_DECISION_TEST_KEY": "native-decision-secret",
@@ -669,7 +670,7 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.assertNotIn("x-session-affinity", lowered)
                 self.assertNotIn("x-multi-turn-session-id", lowered)
 
-    def test_tool_continuation_keeps_reasoning_in_fireworks_native_field(self):
+    def test_tool_continuation_drops_optional_fireworks_reasoning(self):
         history = [
             {"role": "user", "content": "Read the fixture."},
             {
@@ -693,9 +694,10 @@ class FireworksChatTransportTest(unittest.TestCase):
                 self.request(url, input=history, stream=streaming)
                 _, body, _ = captured.get(timeout=5)
                 assistant = body["messages"][-2]
-                self.assertEqual(
-                    assistant["reasoning_content"], "Read before answering."
-                )
+                self.assertNotIn("reasoning_content", assistant)
+                self.assertNotIn("Read before answering.", json.dumps(body))
+                self.assertEqual(body["messages"][-1]["tool_call_id"], "call_reasoning")
+                self.assertEqual(body["messages"][-1]["content"], "41")
                 self.assertNotIn("reasoning", assistant)
                 self.assertEqual(assistant["tool_calls"][0]["id"], "call_reasoning")
 

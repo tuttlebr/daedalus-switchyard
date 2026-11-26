@@ -1,0 +1,439 @@
+diff --git a/crates/libsy-llm-client/src/client.rs b/crates/libsy-llm-client/src/client.rs
+index 8110475..b85b8eb 100644
+--- a/crates/libsy-llm-client/src/client.rs
++++ b/crates/libsy-llm-client/src/client.rs
+@@ -66,6 +66,7 @@ pub struct ModelConfig {
+     upstream_model: ModelId,
+     default_backend: Backend,
+     other_backends: Option<Vec<Backend>>,
++    requires_reasoning_replay: bool,
+ }
+ 
+ impl ModelConfig {
+@@ -82,9 +83,16 @@ impl ModelConfig {
+             model_name,
+             default_backend,
+             other_backends,
++            requires_reasoning_replay: false,
+         }
+     }
+ 
++    /// Keep provider-bound reasoning when replaying prior tool calls or stored outputs.
++    pub fn with_required_reasoning_replay(mut self, required: bool) -> Self {
++        self.requires_reasoning_replay = required;
++        self
++    }
++
+     /// Serve this routing name using a different provider model ID.
+     pub fn with_upstream_model(mut self, model: impl Into<ModelId>) -> Self {
+         self.upstream_model = model.into();
+@@ -257,13 +265,21 @@ impl TranslatingLlmClient {
+         &self,
+         backend: &Backend,
+         wire_format: WireFormat,
+-        llm_request: LlmRequest,
++        mut llm_request: LlmRequest,
+         metadata: Option<&Metadata>,
+         model: &ModelId,
+         endpoint: UpstreamEndpoint,
+     ) -> Result<EncodedResponse> {
+         // Preserve routing identity for backend lookup and send the provider model
+         // on completion and auxiliary endpoints, including preserved wire bodies.
++        let url = endpoint.url(backend);
++        let requires_replay = backend.is_anthropic()
++            || reqwest::Url::parse(&url).is_ok_and(|url| url.host_str() == Some("api.openai.com"))
++            || self
++                .model_to_config
++                .get(model)
++                .is_some_and(|config| config.requires_reasoning_replay);
++        crate::reasoning_history::prune(&mut llm_request, wire_format, requires_replay);
+         let model = self.upstream_model(model);
+         let mut body = encode_request(&llm_request, wire_format)
+             .map_err(|error| LlmClientError::RequestEncoding(error.to_string()))?;
+@@ -306,7 +322,6 @@ impl TranslatingLlmClient {
+         }
+         let streaming = endpoint.allows_streaming()
+             && body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+-        let url = endpoint.url(backend);
+         record_gen_ai_request(&url, model, streaming);
+ 
+         self.send_with_retries(&url, backend, &body, metadata, model, streaming)
+@@ -2539,9 +2554,12 @@ mod tests {
+                 ]},
+                 {"role": "assistant", "content": [
+                     {"type": "thinking", "thinking": "signed reasoning", "signature": "sig-abc"},
+-                    {"type": "text", "text": "here goes"}
++                    {"type": "text", "text": "here goes"},
++                    {"type": "tool_use", "id": "call_fixture", "name": "lookup", "input": {}}
+                 ]},
+-                {"role": "user", "content": "continue"}
++                {"role": "user", "content": [
++                    {"type": "tool_result", "tool_use_id": "call_fixture", "content": "OK"}
++                ]}
+             ]
+         });
+ 
+diff --git a/crates/libsy-llm-client/src/lib.rs b/crates/libsy-llm-client/src/lib.rs
+index d5f579c..9d9ff3a 100644
+--- a/crates/libsy-llm-client/src/lib.rs
++++ b/crates/libsy-llm-client/src/lib.rs
+@@ -23,6 +23,7 @@ pub mod metrics;
+ mod observability;
+ mod observation;
+ pub mod raw;
++mod reasoning_history;
+ pub mod run;
+ 
+ pub use backend::{Backend, DEFAULT_MAX_RETRIES, HttpBackendConfig};
+diff --git a/crates/libsy-llm-client/src/reasoning_history.rs b/crates/libsy-llm-client/src/reasoning_history.rs
+new file mode 100644
+index 0000000..1432a22
+--- /dev/null
++++ b/crates/libsy-llm-client/src/reasoning_history.rs
+@@ -0,0 +1,322 @@
++// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Remove assistant reasoning from the history that will actually be encoded.
++use serde_json::Value;
++use switchyard_protocol::{ContentBlock, LlmRequest, Role, WireFormat};
++
++pub(crate) fn prune(request: &mut LlmRequest, target: WireFormat, requires_replay: bool) {
++    // The codec prefers the exact source body on same-format calls. Editing the
++    // IR alone would miss those calls; rebuilding it would lose provider fields.
++    if let Some(body) = request.preservation.requests.get_mut(&target.into()) {
++        match target {
++            WireFormat::OpenAiResponses => {
++                if let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) {
++                    prune_responses(items, requires_replay);
++                }
++            }
++            WireFormat::OpenAiChat | WireFormat::AnthropicMessages => {
++                if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
++                    messages.retain_mut(|message| {
++                        (requires_replay && has_message_tool_call(message))
++                            || retain_message(message)
++                    });
++                }
++            }
++        }
++        return;
++    }
++
++    // Cross-format encoders can render unknown blocks as visible JSON text.
++    // Remove private blocks before that lossy conversion.
++    retain_output_groups(
++        &mut request.messages,
++        requires_replay,
++        |message| message.role == Role::Assistant,
++        |message| {
++            message.role == Role::Assistant
++                && message
++                    .content
++                    .iter()
++                    .any(|b| matches!(b, ContentBlock::ToolCall(_)))
++        },
++        |message, keep| {
++            if message.role != Role::Assistant {
++                return !matches!(message.content.as_slice(), [ContentBlock::Unknown { raw, .. }]
++                if is_reasoning_reference(raw));
++            }
++            let before = message.content.len();
++            message.content.retain(|block| match block {
++                ContentBlock::Reasoning { .. } => keep,
++                ContentBlock::Unknown { raw, provider } if is_reasoning_block(raw) => {
++                    keep && provider.as_str() == target.as_str()
++                }
++                _ => true,
++            });
++            before == message.content.len()
++                || !message
++                    .content
++                    .iter()
++                    .all(|b| matches!(b, ContentBlock::Text { text } if text.is_empty()))
++        },
++    );
++}
++
++fn kind(item: &Value) -> &str {
++    item.get("type").and_then(Value::as_str).unwrap_or("")
++}
++
++fn is_reasoning_block(item: &Value) -> bool {
++    matches!(
++        kind(item),
++        "reasoning" | "reasoning_text" | "summary_text" | "thinking" | "redacted_thinking"
++    )
++}
++
++fn is_reasoning_reference(item: &Value) -> bool {
++    kind(item) == "item_reference" && item["id"].as_str().is_some_and(|id| id.starts_with("rs_"))
++}
++
++fn has_message_tool_call(message: &Value) -> bool {
++    message
++        .get("tool_calls")
++        .and_then(Value::as_array)
++        .is_some_and(|calls| !calls.is_empty())
++        || message.get("function_call").is_some_and(Value::is_object)
++        || message
++            .get("content")
++            .and_then(Value::as_array)
++            .is_some_and(|parts| {
++                parts
++                    .iter()
++                    .any(|p| matches!(kind(p), "tool_use" | "server_tool_use" | "mcp_tool_use"))
++            })
++}
++
++// Only visit assistant message fields and direct content parts. Arguments,
++// tool results, literal text, images and request-level reasoning controls are data.
++fn retain_message(message: &mut Value) -> bool {
++    if message["role"] != "assistant" {
++        return true;
++    }
++    let object = message.as_object_mut().expect("message with a role");
++    let mut removed = false;
++    for field in ["reasoning", "reasoning_content", "reasoning_details"] {
++        removed |= object.remove(field).is_some();
++    }
++    if let Some(parts) = object.get_mut("content").and_then(Value::as_array_mut) {
++        let before = parts.len();
++        parts.retain(|part| !is_reasoning_block(part));
++        removed |= before != parts.len();
++    }
++    let has_content = match object.get("content").unwrap_or(&Value::Null) {
++        Value::Null => false,
++        Value::String(text) => !text.is_empty(),
++        Value::Array(parts) => !parts.is_empty(),
++        _ => true,
++    };
++    // Keep extensions such as audio and refusals, as well as tool calls.
++    !removed
++        || has_content
++        || object.iter().any(|(key, value)| {
++            !value.is_null()
++                && !matches!(key.as_str(), "role" | "content" | "id" | "status" | "type")
++        })
++}
++
++fn requires_response_reasoning(item: &Value) -> bool {
++    // OpenAI also validates reasoning paired with stored output message IDs.
++    let id = item["id"].as_str().unwrap_or_default();
++    kind(item).ends_with("_call")
++        || matches!(kind(item), "mcp_approval_request" | "mcp_list_tools")
++        || (item["role"] == "assistant" && id.starts_with("msg_"))
++        || (kind(item) == "item_reference" && (id.starts_with("fc_") || id.starts_with("msg_")))
++}
++
++fn is_response_output(item: &Value) -> bool {
++    item["role"] == "assistant"
++        || kind(item) == "reasoning"
++        || is_reasoning_reference(item)
++        || requires_response_reasoning(item)
++}
++
++fn prune_responses(items: &mut Vec<Value>, requires_replay: bool) {
++    // Responses represents a single assistant output as adjacent items. Keep the
++    // full group when a tool call or stored output ID requires its reasoning.
++    // User messages and tool results delimit groups, including parallel calls.
++    retain_output_groups(
++        items,
++        requires_replay,
++        is_response_output,
++        requires_response_reasoning,
++        |item, keep| {
++            keep || (kind(item) != "reasoning"
++                && !is_reasoning_reference(item)
++                && retain_message(item))
++        },
++    );
++}
++
++// A single assistant turn can span several adjacent output items or IR messages.
++// Determine which groups bind their reasoning before compacting history in place.
++fn retain_output_groups<T>(
++    items: &mut Vec<T>,
++    requires_replay: bool,
++    is_output: impl Fn(&T) -> bool,
++    binds_reasoning: impl Fn(&T) -> bool,
++    mut retain: impl FnMut(&mut T, bool) -> bool,
++) {
++    if !requires_replay {
++        items.retain_mut(|item| retain(item, false));
++        return;
++    }
++    let mut bound = Vec::with_capacity(items.len());
++    for group in items.chunk_by(|left, right| is_output(left) && is_output(right)) {
++        bound.resize(
++            bound.len() + group.len(),
++            group.iter().any(&binds_reasoning),
++        );
++    }
++    let mut bound = bound.into_iter();
++    items.retain_mut(|item| retain(item, bound.next().expect("one flag per history item")));
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++    use switchyard_translation::{decode_request, encode_request};
++
++    #[test]
++    fn anthropic_history_preserves_signed_and_redacted_tool_replay() {
++        let thinking = json!({"type":"thinking", "thinking":"private", "signature":"signed"});
++        let redacted = json!({"type":"redacted_thinking", "data":"opaque"});
++        let visible = json!({"type":"text", "text":"Visible."});
++        let call = json!({"type":"tool_use","name":"lookup","id":"tool1","input":{"reasoning":"argument"}});
++        let result = json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"tool1","content":"<think>literal tool output</think>"}]});
++        let history = json!({"model":"fixture","max_tokens":128,"thinking":{"type":"adaptive"},"messages":[
++            {"role":"user","content":"Start."},
++            {"role":"assistant","content":[thinking,redacted,visible]},
++            {"role":"user","content":"Read."},
++            {"role":"assistant","content":[thinking,redacted,call]},
++            result
++        ]});
++        let format = WireFormat::AnthropicMessages;
++        let mut req = decode_request(format, &history).unwrap();
++        prune(&mut req, format, true);
++        let sent = encode_request(&req, format).unwrap();
++        let mut expected = history.clone();
++        expected["messages"][1]["content"] = json!([visible]);
++        assert_eq!(sent, expected);
++
++        let mut req = decode_request(format, &history).unwrap();
++        prune(&mut req, WireFormat::OpenAiChat, false);
++        let chat = encode_request(&req, WireFormat::OpenAiChat).unwrap();
++        let wire = chat.to_string();
++        assert!(!wire.contains("private") && !wire.contains("opaque"));
++        assert!(wire.contains("Visible.") && wire.contains("literal tool output"));
++    }
++
++    #[test]
++    fn chat_drops_trace_only_turns_and_keeps_literal_fields_and_controls() {
++        let format = WireFormat::OpenAiChat;
++        let user = json!({"role":"user","content":"<think>example</think>"});
++        let history = json!({"model":"fixture","reasoning_effort":"high","messages":[
++            user,
++            {"role":"assistant","reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}],"content":null},
++            {"role":"assistant","reasoning":"private","content":[{"type":"reasoning_text","text":"private"},{"type":"text","text":"Visible."}]},
++            {"role":"assistant","reasoning_content":"private","refusal":"no","content":null}
++        ]});
++        let mut req = decode_request(format, &history).unwrap();
++        prune(&mut req, format, false);
++        assert_eq!(
++            encode_request(&req, format).unwrap(),
++            json!({
++                "model":"fixture", "reasoning_effort":"high","messages":[user,
++                    {"role":"assistant","content":[{"type":"text","text":"Visible."}]},
++                    {"role":"assistant","refusal":"no","content":null}]
++            })
++        );
++    }
++
++    #[test]
++    fn translated_tool_turn_keeps_reasoning_across_adjacent_assistant_items() {
++        let chat = json!({"model":"fixture","messages":[
++            {"role":"user","content":"Read."},
++            {"role":"assistant","content":"Looking it up.","reasoning_content":"tool-trace"},
++            {"role":"assistant","content":null,"tool_calls":[{"type":"function","id":"call1","function":{"name":"lookup","arguments":"{}"}}]},
++            {"role":"tool","tool_call_id":"call1","content":"result"}
++        ]});
++        for required in [false, true] {
++            let mut req = decode_request(WireFormat::OpenAiChat, &chat).unwrap();
++            prune(&mut req, WireFormat::OpenAiResponses, required);
++            let sent = encode_request(&req, WireFormat::OpenAiResponses).unwrap();
++            assert_eq!(sent.to_string().contains("tool-trace"), required);
++            assert_eq!(
++                sent["input"].as_array().unwrap().last().unwrap()["call_id"],
++                "call1"
++            );
++        }
++    }
++
++    #[test]
++    fn responses_keeps_required_reasoning_in_order() {
++        let trace =
++            json!({"type":"reasoning","id":"rs_tool","encrypted_content":"opaque","summary":[]});
++        let reference = json!({"type":"item_reference","id":"rs_tool"});
++        let call = json!({"type":"custom_tool_call","call_id":"one","name":"read","input":"a"});
++        let call2 = json!({"type":"function_call","call_id":"two","name":"read","arguments":"{}"});
++        let output = json!({"type":"custom_tool_call_output","call_id":"one","output":"a"});
++        let output2 = json!({"type":"function_call_output","call_id":"two","output":"b"});
++        let text = json!({"type":"message","role":"assistant","content":"Visible."});
++        let user = json!({"role":"user","content":"Read."});
++        let history = vec![
++            trace.clone(),
++            text.clone(),
++            user.clone(),
++            reference.clone(),
++            trace.clone(),
++            text.clone(),
++            call.clone(),
++            call2.clone(),
++            output.clone(),
++            output2.clone(),
++            trace.clone(),
++        ];
++        let mut strict = history.clone();
++        prune_responses(&mut strict, true);
++        assert_eq!(
++            strict,
++            vec![
++                text.clone(),
++                user.clone(),
++                reference,
++                trace,
++                text.clone(),
++                call.clone(),
++                call2.clone(),
++                output.clone(),
++                output2.clone()
++            ]
++        );
++        let stored =
++            json!({"type":"message","role":"assistant","id":"msg_stored","content":"Visible."});
++        let mut stored_history = vec![
++            json!({"type":"reasoning","id":"rs_stored","summary":[]}),
++            stored.clone(),
++            user.clone(),
++        ];
++        let original = stored_history.clone();
++        prune_responses(&mut stored_history, true);
++        assert_eq!(stored_history, original);
++        prune_responses(&mut stored_history, false);
++        assert_eq!(stored_history, vec![stored, user.clone()]);
++
++        let mut optional = history;
++        prune_responses(&mut optional, false);
++        assert_eq!(
++            optional,
++            vec![text.clone(), user, text, call, call2, output, output2]
++        );
++    }
++}
+diff --git a/crates/switchyard-runner/src/config.rs b/crates/switchyard-runner/src/config.rs
+index 0b41aad..91811a6 100644
+--- a/crates/switchyard-runner/src/config.rs
++++ b/crates/switchyard-runner/src/config.rs
+@@ -346,7 +346,8 @@ impl DeploymentConfig {
+                     )?,
+                     None,
+                 )
+-                .with_upstream_model(target.model.as_ref().unwrap_or(&target.id)),
++                .with_upstream_model(target.model.as_ref().unwrap_or(&target.id))
++                .with_required_reasoning_replay(client_config.requires_reasoning_replay),
+             );
+         }
+ 
+@@ -587,6 +588,9 @@ impl<'de> Deserialize<'de> for HttpBaseUrl {
+ struct LlmClientConfig {
+     format: ClientFormat,
+     base_url: HttpBaseUrl,
++    /// Keep provider-bound reasoning on compatible endpoints that require it.
++    #[serde(default)]
++    requires_reasoning_replay: bool,
+     api_key_env: Option<String>,
+     #[serde(default)]
+     forward_auth: bool,
