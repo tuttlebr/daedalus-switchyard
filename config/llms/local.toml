@@ -1,7 +1,7 @@
 # The Dynamo frontend serves this model directly without a provider API key.
 [llm_clients.local]
 format = "openai_chat"
-base_url = "http://mx-inkling-2-mini-spark-tp1-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
+base_url = "http://mx-inkling-2-mini-l40s-tp2-frontend.daedalus-dynamo.svc.cluster.local:8000/v1"
 
 # Inkling reads chat_template_kwargs.reasoning_effort. Named levels are none (0),
 # minimal (0.1), low (0.2), medium (0.7), high (0.9, default), and xhigh/max (0.99).
@@ -23,10 +23,10 @@ extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "high"
 id = "low"
 model = "thinkingmachines/Inkling-2-Mini"
 llm_client = "local"
-extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "low" } }
+extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "medium" } }
 
 [targets.instant]
 id = "instant"
 model = "thinkingmachines/Inkling-2-Mini"
 llm_client = "local"
-extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "none" } }
+extra_body = { stream = true, chat_template_kwargs = { reasoning_effort = "low" } }
