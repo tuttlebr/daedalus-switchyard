@@ -48,11 +48,18 @@ class ProviderRoutesTest(unittest.TestCase):
                 else:
                     self.assertNotIn("baseten", classifier)
                     self.assertEqual(classifier["max_input_tokens"], "auto")
-                self.assertTrue(classifier["truncate_input"])
+                self.assertEqual(classifier["truncate_input"], classifier["model"] != "baselabs/bison-1")
                 self.assertEqual(set(classifier["choices"]), CATEGORIES)
                 for choice in classifier["choices"].values():
                     self.assertIn(choice["target"], targets)
                     self.assertTrue(0 <= choice["min_probability"] <= 1)
+
+    def test_bison_fragment_selects_the_local_model_without_credentials(self):
+        classifier = load_config(ROOT / "config/decision/bison.toml")["routes"]["stage"]["classifier"]
+        self.assertEqual(classifier["base_url"], "http://decision-api.daedalus.svc.cluster.local:30000/v1")
+        self.assertEqual(classifier["model"], "baselabs/bison-1")
+        self.assertNotIn("baseten", classifier)
+        self.assertNotIn("api_key_env", classifier)
 
     def test_classifier_prose_names_only_available_categories_and_fallback(self):
         import re

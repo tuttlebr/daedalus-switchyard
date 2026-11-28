@@ -1,22 +1,20 @@
 # Decision input limits
 
-Switchyard fits classifier input to the decision service's serving limit.
-Applications continue sending their complete requests; fitting does not trim
-the answering-model request. Provider-side context limits still apply separately.
+Each decision profile sets an input budget for the classifier. The answering
+model receives the complete request and applies its own context limit.
 
-## Hosted Bison
+## Local Bison
 
-`config/decision/bison.toml` selects Baseten's hosted System One API. Switchyard
-sends the public Bison model name, the routing question, the serialized state and
-`max_len = 131072` in one request. The provider enforces that token limit on
-the complete question and counts one output token. The gateway accepts the
-requested model name or the backend identifier pinned in `baseten.response_model`.
-[Baseten System One reference](https://docs.baseten.co/reference/inference-api/system-one)
+`config/decision/bison.toml` selects `baselabs/bison-1` on the `decision-api`
+Service in `daedalus`. Switchyard reads the model's `max_model_len` from
+`/v1/models` and sends the state and routing question to `/v1/systemone`.
+Bison renders the question with OneJev and reports the input token count and
+zero output tokens. The SGLang token fitter uses a different prompt template,
+so the Bison profile sets `truncate_input = false`.
 
-The 65,536-byte wire budget applies to the complete serialized request. When it
-overflows, Switchyard shortens only the classifier state, preserves excerpts of
-the opening and current task, and measures the encoded size again. The input
-token count in routing evidence comes from the provider's response.
+Discovery and scoring share a 45-second deadline. The default target handles
+timeouts, classifier requests over 65,536 bytes, scorer errors, and responses
+whose input token count reaches the advertised serving limit.
 
 ## Self-hosted Elephant
 

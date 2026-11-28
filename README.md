@@ -78,7 +78,7 @@ routing policy, and provider definitions live separately:
 
 | File | What to edit there |
 | --- | --- |
-| `config/decision/bison.toml` | Hosted Baseten decision endpoint, request and response model names, timeout, and input limits |
+| `config/decision/bison.toml` | Local Bison decision endpoint, served model, timeout, and input limits |
 | `config/decision/elephant.toml` | Self-hosted SGLang decision endpoint, model discovery, timeout, and input budget |
 | `config/routing/four-category.toml` | Stage routing, classifier instructions and categories, default probability gates, and common public aliases |
 | `config/llms/<provider>.toml` | Provider clients, credential references, models, generation settings, and headers |
@@ -261,19 +261,20 @@ so also check classification through the selected route when integrating a new
 decision endpoint. Explicit aliases can work while automatic requests fall back
 because the classifier is unavailable.
 
-The `[routes.stage]` table uses `decision_api`. The hosted Bison profile posts
-the public model name directly to Baseten's `/v1/systemone`. Self-hosted
-Elephant uses `model = "auto"` to discover its single model through `/v1/models`.
+The `[routes.stage]` table uses `decision_api`. The Bison profile selects
+`baselabs/bison-1` on the `decision-api` Service in `daedalus`. Elephant uses
+`model = "auto"` to discover its single model. Both profiles read the serving
+limit from `/v1/models` and score requests through `/v1/systemone`.
 The service receives SystemOne state and an `effort` choice question containing
 the four categories plus `uncertain`. The gateway validates identity, options,
 normalized probabilities and usage; optional `x_label_mass` does not gate routing.
 
-Judge context includes client instructions, the opening task, latest ordinary
-user instruction, six recent messages and tool names; private reasoning is
-omitted. For Bison the gateway fits the request to its wire budget and sends
-the token limit to System One. For Elephant it measures the complete prompt
-with the service's tokenizer. Both paths trim only judge context and preserve
-the answering request. Unsupported media or a failed classifier uses the fallback.
+Judge context includes client instructions, the opening task, six recent
+messages and tool names. The gateway omits private reasoning. Bison uses
+the default target when its judge request exceeds the
+65,536-byte budget or the model's input limit. For Elephant the gateway fits
+judge context with the service's tokenizer. The answering model receives the
+original request. Unsupported media or a failed classifier uses the fallback.
 See [input limits](docs/decision-input-limits.md) and
 [standalone routing](docs/standalone-decision-routing.md).
 

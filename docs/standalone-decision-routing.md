@@ -46,14 +46,16 @@ Caller-supplied reasoning fields override a selected target's defaults through
 a shallow merge; omit those overrides when measuring the configured mapping.
 
 The gateway sends each new task to the decision service selected by the route.
-Hosted Bison uses a pinned request slug. Self-hosted Elephant discovers its
-served model. Both use validated choice probabilities to select a target.
+The Bison profile requires `baselabs/bison-1` on the local `decision-api` Service.
+The Elephant profile discovers its served model. Both use validated choice
+probabilities to select a target.
 Classification failures send new tasks to the default target.
 
 Routing does not provide a local-processing or privacy boundary.
-The judge receives the opening task, latest user instruction and six recent
-messages. Bison fits the serialized classifier request to its wire budget and
-enforces a server-side token ceiling. Elephant fits the prompt with its
+The judge receives the opening task and six recent messages. The Elephant
+profile also retains the latest user instruction outside that window.
+The Bison profile checks the serialized request size and uses the
+model's advertised context limit. Elephant fits the prompt with its
 tokenizer. Count fallback events separately from accepted judge choices.
 
 ## Implementation and local checks
@@ -96,7 +98,7 @@ provider fallback and explicit profile bypass.
 5. Keep a held-out QA set. Accept a policy based on quality and measured cost or
    latency, rather than a desired fraction of lower-effort choices. Discovery,
    tokenization, input fitting and classification share the selected classifier's
-   `timeout_ms` budget (currently 2000 ms in the shipped files). Measure its
+   `timeout_ms` budget. Measure its
    overhead with the answering path, including failures and fallback.
 
 ```bash

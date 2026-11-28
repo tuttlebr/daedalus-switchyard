@@ -1,13 +1,12 @@
-# Hosted System One accepts the public slug and reports the backend identifier.
+# The decision-api Service can also serve Elephant. Require the local Bison model.
 [routes.stage.classifier]
 type = "decision_api"
-base_url = "https://inference.baseten.co/v1"
-model = "decision-models/baseten-bison-latest"
-baseten = { response_model = "decision-models/baseten-bison-31b-latest" }
+base_url = "http://decision-api.daedalus.svc.cluster.local:30000/v1"
+model = "baselabs/bison-1"
 classify_trigger = "user_turn"
-timeout_ms = 2000
+timeout_ms = 45000
 recent_turn_window = 6
-max_input_tokens = 131072
-truncate_input = true
+max_input_tokens = "auto"
+# Bison renders its own System One prompt. Switchyard's token fitter uses Elephant's template.
+truncate_input = false
 max_request_bytes = 65536
-api_key_env = "BASETEN_API_KEY"
