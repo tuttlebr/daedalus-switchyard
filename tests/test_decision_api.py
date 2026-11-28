@@ -62,7 +62,7 @@ class ProbeSchemaTest(unittest.TestCase):
 @unittest.skipUnless(BINARY, "set SWITCHYARD_TEST_BINARY to the built binary")
 class DecisionGatewayTest(unittest.TestCase):
     @contextmanager
-    def gateway(self, response=None, model="baselabs/elephant-1", timeout_ms=2000, base_suffix="/v1", standalone=False, truncate=False, trigger=None, forward_auth=False):
+    def gateway(self, response=None, model="baselabs/elephant-1", timeout_ms=2000, base_suffix="/v1", standalone=False, truncate=False, trigger=None, forward_auth=False, hosted=False):
         state = {"response": response or verdict(), "judges": [], "providers": [], "provider_headers": [],
                  "models": [{"id": "baselabs/elephant-1", "max_model_len": 4096}], "discoveries": [],
                  "discovery_status": 200, "discovery_delay": 0, "judge_delay": 0,
@@ -109,7 +109,7 @@ class DecisionGatewayTest(unittest.TestCase):
                     state["judges"].append(body)
                     time.sleep(state["judge_delay"])
                     result = state["response"]
-                    if truncate:
+                    if truncate and not hosted:
                         count = (len(prompt_text(body)) + state["token_scale"] - 1) // state["token_scale"]
                         if count >= state["models"][0]["max_model_len"]:
                             status = 400
@@ -155,6 +155,9 @@ id = "{target}"
 model = "fixture-{target}"
 llm_client = "fixture"
 '''
+                limit = 'max_input_tokens = "auto"' if truncate else ""
+                if hosted:
+                    limit = 'max_input_tokens = 131072\nbaseten = { response_model = "fixture-bison-backend" }'
                 source += f'''
 [routes.stage]
 id = "daedalus"
@@ -166,7 +169,7 @@ type = "decision_api"
 model = "{model}"
 base_url = "http://127.0.0.1:{upstream.server_port}{base_suffix}"
 timeout_ms = {timeout_ms}
-{'max_input_tokens = "auto"' if truncate else ''}
+{limit}
 {'truncate_input = true' if truncate else ''}
 classify_trigger = "{trigger or ('every_request' if standalone else 'user_turn')}"
 instructions = "Choose sufficient effort for the whole task."
@@ -242,6 +245,43 @@ target = "low"
                 self.assertEqual(self.request(url, endpoint=endpoint), "low")
             self.assertEqual(len(state["judges"]), 2)
             self.assertEqual({x["model"] for x in state["providers"]}, {"fixture-low"})
+
+    def test_hosted_system_one_scores_both_apis_and_compacts_only_judge_state(self):
+        reply = verdict()
+        reply["model"] = "fixture-bison-backend"
+        reply["usage"]["output_tokens"] = 1
+        del reply["answers"]["effort"]["x_label_mass"]
+        message = 'OPEN ' + 'quoted "☀" ' * 7000 + ' END'
+        with self.gateway(model="fixture-bison", response=reply, hosted=True, truncate=True, standalone=True) as (url, state):
+            for endpoint in ("chat/completions", "responses"):
+                self.assertEqual(self.request(url, messages=[{"role": "user", "content": message}], endpoint=endpoint), "low")
+                judge = state["judges"][-1]
+                self.assertEqual(judge["model"], "fixture-bison")
+                self.assertEqual(judge["max_len"], 131072)
+                self.assertNotIn("chat_template_kwargs", judge)
+                self.assertLessEqual(len(json.dumps(judge, ensure_ascii=False, separators=(",", ":")).encode()), 12000)
+                fitted = json.loads(judge["state"])
+                self.assertTrue(fitted["context_truncated"])
+                excerpt = fitted["messages"][0]["content"]
+                self.assertIn("OPEN", excerpt)
+                self.assertIn("END", excerpt)
+                self.assertIn(message, str(state["providers"][-1]["messages"][0]["content"]))
+            self.assertEqual((len(state["judges"]), state["discoveries"], state["tokenizations"]), (2, [], []))
+
+    def test_hosted_identity_usage_and_probability_checks(self):
+        with self.gateway(model="fixture-bison", hosted=True, standalone=True) as (url, state):
+            def route(model, output_tokens, input_tokens=100):
+                state["response"].update(model=model, usage={"input_tokens": input_tokens, "output_tokens": output_tokens})
+                return self.request(url)
+
+            self.assertEqual(route("fixture-bison-backend", 1, 131072), "low")
+            self.assertEqual(route("fixture-bison", 1), "low")
+            self.assertEqual(route("other-model", 1), "max")
+            self.assertEqual(route("fixture-bison-backend", 0), "max")
+            self.assertEqual(route("fixture-bison-backend", 2), "max")
+            self.assertEqual(route("fixture-bison-backend", 1, 131073), "max")
+            state["response"]["answers"]["effort"]["probabilities"]["low"] = 0.1
+            self.assertEqual(route("fixture-bison-backend", 1), "max")
 
     def test_auto_follows_loaded_model_changes_through_both_apis(self):
         with self.gateway(model="auto") as (url, state):

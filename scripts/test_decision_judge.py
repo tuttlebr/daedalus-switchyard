@@ -73,6 +73,12 @@ def validate_answer_fields(answer: dict) -> None:
 
 
 def probe(config: dict, base: str, fallback_target: str | None = None) -> list[dict]:
+    hosted = config.get("baseten")
+    if hosted is not None and (
+        config["model"] == "auto" or type(config.get("max_input_tokens")) is not int
+        or not hosted["response_model"].strip()
+    ):
+        raise ValueError("Hosted Baseten decisions require a model, numeric max_input_tokens and response_model")
     key_env = config.get("api_key_env")
     headers = {"Content-Type": "application/json"}
     if key_env:
@@ -134,7 +140,10 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
             "questions": {"effort": question},
         }
         measured_tokens = None
-        if config.get("truncate_input", False):
+        if hosted is not None:
+            payload["max_len"] = input_limit
+            payload["state"] = json.dumps(payload["state"], ensure_ascii=False, separators=(",", ":"))
+        elif config.get("truncate_input", False):
             payload["chat_template_kwargs"] = {"enable_thinking": False}
             # These fixed synthetic cases are small; use the gateway integration
             # tests for state truncation rather than duplicating that algorithm here.
@@ -159,8 +168,8 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
             if type(measured_tokens) is not int or not 0 < measured_tokens < input_limit:
                 raise ValueError("Synthetic question exceeds the hosted limit; test compaction through the gateway")
             payload["state"] = json.dumps(payload["state"], ensure_ascii=False, separators=(",", ":"))
-        body = json.dumps(payload).encode()
-        if not config.get("truncate_input", False) and len(body) > config.get("max_request_bytes", 12000):
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        if (hosted is not None or not config.get("truncate_input", False)) and len(body) > config.get("max_request_bytes", 12000):
             raise ValueError("Synthetic request exceeds the configured input budget")
         if time.monotonic() >= deadline:
             raise TimeoutError("Decision deadline exceeded during discovery")
@@ -173,7 +182,8 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
                 raise ValueError("Decision response exceeds the response budget")
             value = json.loads(raw)
         elapsed_ms = round((time.monotonic() - started) * 1000, 1)
-        if value["model"] != model or set(value["answers"]) != {"effort"}:
+        response_models = (model, hosted["response_model"]) if hosted is not None else (model,)
+        if value["model"] not in response_models or set(value["answers"]) != {"effort"}:
             raise ValueError("Unexpected decision model or question")
         answer = value["answers"]["effort"]
         validate_answer_fields(answer)
@@ -199,14 +209,14 @@ def probe(config: dict, base: str, fallback_target: str | None = None) -> list[d
         if (
             type(usage["input_tokens"]) is not int
             or type(usage["output_tokens"]) is not int
-            or not 0 < usage["input_tokens"] < input_limit
-            or usage["output_tokens"] != 0
+            or not 0 < usage["input_tokens"] <= (input_limit if hosted is not None else input_limit - 1)
+            or usage["output_tokens"] != (1 if hosted is not None else 0)
             or (measured_tokens is not None and usage["input_tokens"] != measured_tokens)
         ):
             raise ValueError("Unexpected native usage or potentially truncated input")
         row = {
             "case": name,
-            "model": model,
+            "model": value["model"],
             "choice": answer["choice"],
             "probabilities": probabilities,
             "elapsed_ms": elapsed_ms,

@@ -78,7 +78,8 @@ routing policy, and provider definitions live separately:
 
 | File | What to edit there |
 | --- | --- |
-| `config/decision/elephant.toml` | Decision endpoint, model discovery, timeout, and input budget |
+| `config/decision/bison.toml` | Hosted Baseten decision endpoint, request and response model names, timeout, and input limits |
+| `config/decision/elephant.toml` | Self-hosted SGLang decision endpoint, model discovery, timeout, and input budget |
 | `config/routing/four-category.toml` | Stage routing, classifier instructions and categories, default probability gates, and common public aliases |
 | `config/llms/<provider>.toml` | Provider clients, credential references, models, generation settings, and headers |
 | `routes_<profile>.toml` | Component selection and intentional differences for that combination |
@@ -260,18 +261,19 @@ so also check classification through the selected route when integrating a new
 decision endpoint. Explicit aliases can work while automatic requests fall back
 because the classifier is unavailable.
 
-The `[routes.stage]` table uses `decision_api`. With `model = "auto"`, the gateway
-discovers the service's served model through `/v1/models` on each classification.
+The `[routes.stage]` table uses `decision_api`. The hosted Bison profile posts
+the public model name directly to Baseten's `/v1/systemone`. Self-hosted
+Elephant uses `model = "auto"` to discover its single model through `/v1/models`.
 The service receives SystemOne state and an `effort` choice question containing
 the four categories plus `uncertain`. The gateway validates identity, options,
 normalized probabilities and usage; optional `x_label_mass` does not gate routing.
 
 Judge context includes client instructions, the opening task, latest ordinary
 user instruction, six recent messages and tool names; private reasoning is
-omitted. Automatic input budgeting reads hosted limits and tokenizes the complete
-decision prompt. Truncation trims only judge context, preserving the answer
-request. Discovery, tokenization, fitting and scoring share the configured
-deadline. Unsupported media or unavailable tokenization uses the fallback.
+omitted. For Bison the gateway fits the request to its wire budget and sends
+the token limit to System One. For Elephant it measures the complete prompt
+with the service's tokenizer. Both paths trim only judge context and preserve
+the answering request. Unsupported media or a failed classifier uses the fallback.
 See [input limits](docs/decision-input-limits.md) and
 [standalone routing](docs/standalone-decision-routing.md).
 

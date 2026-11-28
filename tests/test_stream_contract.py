@@ -96,7 +96,7 @@ class StreamContractTest(unittest.TestCase):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if self.path.endswith("/systemone"):
                     content_type, raw = "application/json", json.dumps({
-                        "model": "fixture-judge",
+                        "model": classifier.get("baseten", {}).get("response_model", body["model"]),
                         "answers": {"effort": {
                             "type": "choice", "choice": "low", "confidence": 1.0,
                             "probabilities": {
@@ -104,7 +104,7 @@ class StreamContractTest(unittest.TestCase):
                                 for name in (*choices, "uncertain")
                             },
                         }},
-                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                        "usage": {"input_tokens": 1, "output_tokens": int("baseten" in classifier)},
                     })
                 else:
                     state["captured"].append((self.path, body))
@@ -273,7 +273,8 @@ class StreamContractTest(unittest.TestCase):
                         self.assertIn("Visible answer.", sent)
                         if source == "local":
                             self.assertEqual(endpoint, "/v1/chat/completions")
-                            self.assertEqual(body["chat_template_kwargs"]["reasoning_effort"], "low")
+                            expected = config["targets"]["low"]["extra_body"]["chat_template_kwargs"]
+                            self.assertEqual(body["chat_template_kwargs"]["reasoning_effort"], expected["reasoning_effort"])
                             assistant, result = body["messages"][-2:]
                             self.assertEqual(assistant["tool_calls"][0]["id"], "call_fixture")
                             self.assertEqual(json.loads(assistant["tool_calls"][0]["function"]["arguments"]), json.loads(args))

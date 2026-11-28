@@ -1,0 +1,166 @@
+diff --git a/crates/switchyard-runner/src/decision_api.rs b/crates/switchyard-runner/src/decision_api.rs
+index 791fd02..35ae75d 100644
+--- a/crates/switchyard-runner/src/decision_api.rs
++++ b/crates/switchyard-runner/src/decision_api.rs
+@@ -60,6 +60,14 @@ pub struct DecisionTargetConfig {
+     pub min_probability: f64,
+ }
+ 
++/// Baseten's hosted System One API uses a public request slug and may reply
++/// with a distinct backend identifier. Its usage includes one token per question.
++#[derive(Clone, Debug, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct BasetenConfig {
++    pub response_model: String,
++}
++
+ /// A native `/v1/systemone` choice classifier. Confidence is a routing score,
+ /// not a calibrated probability of the answering model's task success.
+ #[derive(Clone, Debug, Deserialize)]
+@@ -69,6 +77,8 @@ pub struct DecisionClassifierConfig {
+     pub base_url: String,
+     /// Served decision model, or "auto" to discover the service's single loaded model.
+     pub model: String,
++    /// Select the hosted Baseten protocol. Omit for the self-hosted scorer.
++    pub baseten: Option<BasetenConfig>,
+     /// Optional server-owned bearer credential. Caller credentials are never forwarded.
+     #[serde(default)]
+     pub api_key_env: Option<String>,
+@@ -84,13 +94,13 @@ pub struct DecisionClassifierConfig {
+     /// Recent messages following the preserved opening task.
+     #[serde(default = "default_window")]
+     pub recent_turn_window: usize,
+-    /// Legacy rejection guard. Token-aware truncation replaces this byte limit.
++    /// Wire budget for hosted requests and for requests without token-aware fitting.
+     #[serde(default = "default_request_bytes")]
+     pub max_request_bytes: usize,
+     /// Server context ceiling, or "auto" to use the served model's max_model_len.
+     #[serde(default = "default_input_tokens")]
+     pub max_input_tokens: InputTokenLimit,
+-    /// Fit judge-only state using SGLang's generic SystemOne renderer and /v1/tokenize.
++    /// Fit judge-only state using the selected service's input budget.
+     #[serde(default)]
+     pub truncate_input: bool,
+     /// Instructions explaining what to decide; conversation content is untrusted data.
+@@ -208,7 +218,16 @@ impl DecisionClassifierConfig {
+                 "decision_api recent_turn_window must be at most 64",
+             ));
+         }
+-        if self.truncate_input && self.criteria().len() > 26 {
++        if let Some(hosted) = &self.baseten {
++            if self.model == "auto"
++                || self.max_input_tokens.fixed().is_none()
++                || hosted.response_model.trim().is_empty()
++            {
++                return Err(AlgorithmConfigError::new(
++                    "hosted Baseten decisions require a model, numeric max_input_tokens and response_model",
++                ));
++            }
++        } else if self.truncate_input && self.criteria().len() > 26 {
+             return Err(AlgorithmConfigError::new(
+                 "decision_api truncate_input supports up to 26 generic SystemOne options",
+             ));
+@@ -558,14 +577,26 @@ impl DecisionClassifier {
+         let context_limit = context_limit.ok_or("model_context_limit")?;
+         let mut measured_tokens = None;
+         let mut truncated = false;
+-        if self.config.truncate_input {
+-            let result = self
+-                .fit_payload(body, &model, context_limit, deadline)
+-                .await?;
+-            body = result.0;
+-            measured_tokens = Some(result.1);
+-            truncated = result.2;
+-        }
++        let (response_model, output_tokens, max_input) = if let Some(hosted) = &self.config.baseten
++        {
++            (body, truncated) = baseten_payload(
++                &body,
++                context_limit,
++                self.config.max_request_bytes,
++                self.config.truncate_input,
++            )?;
++            (hosted.response_model.as_str(), 1, context_limit)
++        } else {
++            if self.config.truncate_input {
++                let (fitted, count, shortened) = self
++                    .fit_payload(body, &model, context_limit, deadline)
++                    .await?;
++                body = fitted;
++                measured_tokens = Some(count);
++                truncated = shortened;
++            }
++            (model.as_str(), 0, context_limit - 1)
++        };
+         let request_bytes = body.len();
+         let request = self
+             .client
+@@ -575,13 +606,13 @@ impl DecisionClassifier {
+         let bytes = self.send(request, deadline).await?;
+         let verdict: DecisionResponse =
+             serde_json::from_slice(&bytes).map_err(|_| "invalid_response")?;
+-        if verdict.model != model {
++        if verdict.model != model && verdict.model != response_model {
+             return Err("model_mismatch");
+         }
+         if verdict.answers.len() != 1
+-            || verdict.usage.output_tokens != 0
++            || verdict.usage.output_tokens != output_tokens
+             || verdict.usage.input_tokens == 0
+-            || verdict.usage.input_tokens >= context_limit
++            || verdict.usage.input_tokens > max_input
+         {
+             return Err("invalid_response");
+         }
+@@ -596,7 +627,7 @@ impl DecisionClassifier {
+             request_bytes,
+             truncated,
+         };
+-        tracing::info!(event = "decision_api_input_prepared", model = %model,
++        tracing::info!(event = "decision_api_input_prepared", model = %verdict.model,
+             context_limit, input_tokens = input.input_tokens, original_request_bytes,
+             request_bytes, truncated);
+         let answer = verdict
+@@ -669,6 +700,42 @@ impl DecisionClassifier {
+     }
+ }
+ 
++/// Baseten enforces max_len on the complete rendered question. Its wire budget
++/// is separate. Serialize the state as text so its nested tool messages and
++/// client instructions are data, not a provider-native conversation.
++fn baseten_payload(
++    body: &[u8],
++    max_tokens: u64,
++    max_bytes: usize,
++    truncate: bool,
++) -> Result<(Vec<u8>, bool), &'static str> {
++    let mut payload: Value = serde_json::from_slice(body).map_err(|_| "invalid_input")?;
++    let original = payload["state"].take();
++    payload["max_len"] = json!(max_tokens);
++    payload["state"] = Value::String(original.to_string());
++    let mut encoded = serde_json::to_vec(&payload).map_err(|_| "invalid_input")?;
++    if encoded.len() <= max_bytes {
++        return Ok((encoded, false));
++    }
++    if !truncate {
++        return Err("input_too_large");
++    }
++    let mut budget = max_bytes;
++    loop {
++        payload["state"] = Value::String(compact_state(&original, budget).to_string());
++        encoded = serde_json::to_vec(&payload).map_err(|_| "invalid_input")?;
++        if encoded.len() <= max_bytes {
++            return Ok((encoded, true));
++        }
++        if budget == 0 {
++            return Err("routing_question_too_large");
++        }
++        // Escaped JSON can expand excerpts. Recheck the actual wire size and
++        // reduce the allocation by at least a quarter to bound fitting work.
++        budget = budget.saturating_sub((encoded.len() - max_bytes).max(budget.div_ceil(4)));
++    }
++}
++
+ /// Mirrors the pinned SGLang generic SystemOne choice renderer used by Elephant.
+ /// Tokenization applies the hosted model's chat template, not a local estimate.
+ fn render_systemone_prompt(payload: &Value) -> Result<String, &'static str> {

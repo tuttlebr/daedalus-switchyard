@@ -89,6 +89,12 @@ RUN git apply --check /tmp/reasoning-history.patch \
     && cargo test --locked --release -p switchyard-llm-client --lib \
     && cargo build --locked --release -p switchyard-server
 
+COPY patches/decision-api-baseten.patch /tmp/
+RUN git apply --check /tmp/decision-api-baseten.patch \
+    && git apply /tmp/decision-api-baseten.patch \
+    && cargo test --locked --release -p switchyard-runner decision_api --lib \
+    && cargo build --locked --release -p switchyard-server
+
 FROM debian:bookworm-slim
 
 ARG SWITCHYARD_COMMIT=336196f6fbfc97ddc71c1700f6092e564e9f23c2
@@ -98,7 +104,7 @@ LABEL org.opencontainers.image.title="NVIDIA-NeMo Switchyard server" \
       org.opencontainers.image.source="https://github.com/NVIDIA-NeMo/Switchyard" \
       org.opencontainers.image.version="0.3.0" \
       org.opencontainers.image.revision="${SWITCHYARD_COMMIT}" \
-      me.daedalus.switchyard.patches="target-model-aliases-v2,fireworks-chat-reasoning-v1,composite-capable-fallback-v1,decision-api-classifier-v2,structural-credential-redaction-v1,fireworks-tool-schema-v3,decision-api-sglang-metadata-v1,decision-api-model-discovery-v1,decision-api-standalone-v1,decision-api-input-budget-v1,responses-native-snapshots-v1,required-streaming-v1,stream-terminal-events-v1,task-scoped-decisions-v1,reasoning-history-v1" \
+      me.daedalus.switchyard.patches="target-model-aliases-v2,fireworks-chat-reasoning-v1,composite-capable-fallback-v1,decision-api-classifier-v2,structural-credential-redaction-v1,fireworks-tool-schema-v3,decision-api-sglang-metadata-v1,decision-api-model-discovery-v1,decision-api-standalone-v1,decision-api-input-budget-v1,responses-native-snapshots-v1,required-streaming-v1,stream-terminal-events-v1,task-scoped-decisions-v1,reasoning-history-v1,decision-api-baseten-v1" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \

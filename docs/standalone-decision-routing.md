@@ -40,22 +40,21 @@ begins follow the existing stream and partial-result handling.
 
 Change category criteria and probability gates in
 `config/routing/four-category.toml`, decision endpoint/budget settings in
-`config/decision/elephant.toml`, and target models/defaults in the selected
+`config/decision/bison.toml` or `config/decision/elephant.toml`, and target models/defaults in the selected
 `config/llms/` fragment. The root profile can override any of these when composed.
 Caller-supplied reasoning fields override a selected target's defaults through
 a shallow merge; omit those overrides when measuring the configured mapping.
 
-The decision server is a separately provisioned dependency. The gateway discovers
-its model, prepares the classifier request and uses its scores; it does not
-install or train that model. A healthy gateway can still select the default
-for new tasks if discovery, tokenization or classification fails.
+The gateway sends each new task to the decision service selected by the route.
+Hosted Bison uses a pinned request slug. Self-hosted Elephant discovers its
+served model. Both use validated choice probabilities to select a target.
+Classification failures send new tasks to the default target.
 
 Routing does not provide a local-processing or privacy boundary.
 The judge receives the opening task, latest user instruction and six recent
-messages. The input-budget update discovers the hosted context limit and
-truncates judge-only state to fit, using the hosted tokenizer. Unsupported media
-or unavailable tokenization still falls back. These fallbacks should be counted
-separately from accepted judge choices.
+messages. Bison fits the serialized classifier request to its wire budget and
+enforces a server-side token ceiling. Elephant fits the prompt with its
+tokenizer. Count fallback events separately from accepted judge choices.
 
 ## Implementation and local checks
 
@@ -102,7 +101,7 @@ provider fallback and explicit profile bypass.
 
 ```bash
 python3 scripts/test_decision_judge.py routes_fireworks.toml \
-  --base-url http://127.0.0.1:30090/v1 --output /tmp/decision-routing-probe.json
+  --output /tmp/decision-routing-probe.json
 ```
 
 ## Rollback

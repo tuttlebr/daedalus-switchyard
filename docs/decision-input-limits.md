@@ -4,7 +4,24 @@ Switchyard fits classifier input to the decision service's serving limit.
 Applications continue sending their complete requests; fitting does not trim
 the answering-model request. Provider-side context limits still apply separately.
 
-The discovered `routes_*.toml` configurations use:
+## Hosted Bison
+
+`config/decision/bison.toml` selects Baseten's hosted System One API. Switchyard
+sends the public Bison model name, the routing question, the serialized state and
+`max_len = 131072` in one request. The provider enforces that token limit on
+the complete question and counts one output token. The gateway accepts the
+requested model name or the backend identifier pinned in `baseten.response_model`.
+[Baseten System One reference](https://docs.baseten.co/reference/inference-api/system-one)
+
+The 65,536-byte wire budget applies to the complete serialized request. When it
+overflows, Switchyard shortens only the classifier state, preserves excerpts of
+the opening and current task, and measures the encoded size again. The input
+token count in routing evidence comes from the provider's response.
+
+## Self-hosted Elephant
+
+`config/decision/elephant.toml` uses the SGLang discovery and tokenizer endpoints.
+Its settings are
 
 ```toml
 [routes.stage.classifier]

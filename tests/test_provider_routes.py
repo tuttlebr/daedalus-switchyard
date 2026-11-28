@@ -40,7 +40,14 @@ class ProviderRoutesTest(unittest.TestCase):
                 self.assertIn(route["default_target"], targets)
                 classifier = route["classifier"]
                 self.assertEqual(classifier["classify_trigger"], "user_turn")
-                self.assertEqual(classifier["max_input_tokens"], "auto")
+                if classifier["base_url"] == "https://inference.baseten.co/v1":
+                    self.assertEqual(classifier["model"], "decision-models/baseten-bison-latest")
+                    self.assertEqual(classifier["baseten"]["response_model"], "decision-models/baseten-bison-31b-latest")
+                    self.assertEqual(classifier["max_input_tokens"], 131072)
+                    self.assertEqual(classifier["api_key_env"], "BASETEN_API_KEY")
+                else:
+                    self.assertNotIn("baseten", classifier)
+                    self.assertEqual(classifier["max_input_tokens"], "auto")
                 self.assertTrue(classifier["truncate_input"])
                 self.assertEqual(set(classifier["choices"]), CATEGORIES)
                 for choice in classifier["choices"].values():

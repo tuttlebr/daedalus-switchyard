@@ -217,13 +217,18 @@ class FireworksChatTransportTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 source_path = ROOT / ("routes_fireworks.toml" if composite == "standalone" else "tests/fixtures/legacy_transport.toml")
-                source = compose_source(source_path)
-                # Pin this existing Clef fixture; automatic model replacement is
-                # covered by the dedicated decision gateway contract tests.
-                source = source.replace('model = "auto"', 'model = "Cloudflare/clef-flash"')
-                # These legacy Clef fixtures do not implement Elephant tokenization.
-                source = source.replace('max_input_tokens = "auto"', 'max_input_tokens = 16384')
-                source = source.replace('truncate_input = true', 'truncate_input = false')
+                if composite == "standalone":
+                    profile = load_config(source_path)
+                    classifier = profile["routes"]["stage"]["classifier"]
+                    classifier.pop("baseten", None)
+                    classifier.update(model="Cloudflare/clef-flash", max_input_tokens=16384, truncate_input=False)
+                    source = dumps(profile)
+                else:
+                    # Keep the original Clef transport fixture independent of service discovery.
+                    source = compose_source(source_path)
+                    source = source.replace('model = "auto"', 'model = "Cloudflare/clef-flash"')
+                    source = source.replace('max_input_tokens = "auto"', 'max_input_tokens = 16384')
+                    source = source.replace('truncate_input = true', 'truncate_input = false')
                 # These transport tests exercise the original same-provider
                 # effort contract, independently of editable production maps.
                 for target in ("max", "xhigh", "high", "medium", "low", "instant"):
